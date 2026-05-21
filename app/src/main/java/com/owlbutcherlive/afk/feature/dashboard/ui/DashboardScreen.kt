@@ -59,7 +59,10 @@ fun DashboardScreen(
             ConnectionStatusCard(state)
 
             // Gateway health check
-            GatewayHealthCard(state)
+            GatewayHealthCard(
+                state = state,
+                onCheckGateway = { viewModel.processIntent(DashboardIntent.CheckGatewayHealth) }
+            )
 
             // Connection details
             ConnectionDetailsCard(state)
@@ -122,7 +125,7 @@ private fun ConnectionStatusCard(state: DashboardUiState) {
 }
 
 @Composable
-private fun GatewayHealthCard(state: DashboardUiState) {
+private fun GatewayHealthCard(state: DashboardUiState, onCheckGateway: () -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth()
     ) {
@@ -212,7 +215,7 @@ private fun GatewayHealthCard(state: DashboardUiState) {
 
             Spacer(Modifier.height(8.dp))
             OutlinedButton(
-                onClick = {},
+                onClick = onCheckGateway,
                 enabled = state.gatewayStatus != DashboardUiState.GatewayStatus.Checking,
                 modifier = Modifier.fillMaxWidth()
             ) {

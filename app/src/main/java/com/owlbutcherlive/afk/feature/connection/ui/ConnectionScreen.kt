@@ -5,6 +5,7 @@ import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
@@ -14,6 +15,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
@@ -209,6 +211,10 @@ fun ConnectionScreen(
                     visualTransformation = if (passwordVisible) VisualTransformation.None
                     else PasswordVisualTransformation(),
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(
+                        onDone = { viewModel.processIntent(ConnectionIntent.Connect) }
+                    ),
                     enabled = state.connectionStatus != ConnectionStatus.Connected,
                     modifier = Modifier.fillMaxWidth()
                 )
@@ -246,6 +252,10 @@ fun ConnectionScreen(
                     visualTransformation = if (passphraseVisible) VisualTransformation.None
                     else PasswordVisualTransformation(),
                     singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    keyboardActions = KeyboardActions(
+                        onDone = { viewModel.processIntent(ConnectionIntent.Connect) }
+                    ),
                     enabled = state.connectionStatus != ConnectionStatus.Connected,
                     modifier = Modifier.fillMaxWidth()
                 )

@@ -13,7 +13,6 @@ import net.schmizz.sshj.transport.verification.PromiscuousVerifier
 import net.schmizz.sshj.userauth.keyprovider.OpenSSHKeyFile
 import java.net.InetSocketAddress
 import java.net.ServerSocket
-import java.util.concurrent.Executors
 
 /**
  * Manages SSH connections with local port forwarding tunnels.
@@ -32,7 +31,6 @@ class TunnelManager {
     private var sshClient: SSHClient? = null
     private var forwarderThread: Thread? = null
     private var serverSocket: ServerSocket? = null
-    private val executor = Executors.newCachedThreadPool()
 
     /**
      * Connect to the remote host and set up local port forwarding.
@@ -176,7 +174,6 @@ class TunnelManager {
      * Clean up when the manager is no longer needed.
      */
     fun onDestroy() {
-        executor.shutdownNow()
         cleanup()
     }
 }
