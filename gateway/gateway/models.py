@@ -44,6 +44,29 @@ class HistoryResponse(BaseModel):
     messages: list[Message]
 
 
+class Session(BaseModel):
+    id: str
+    agent_id: str
+    title: str
+    last_message_preview: str = ""
+    updated_at: str
+
+
+class SessionResponse(BaseModel):
+    id: str
+    agent_id: str
+    title: str
+    updated_at: str
+
+
+class SessionsListResponse(BaseModel):
+    sessions: list[Session]
+
+
+class CreateSessionRequest(BaseModel):
+    agent_id: str
+
+
 # ─── WebSocket message models ────────────────────────────────────────────────
 
 class IncomingMessageType(str, Enum):
@@ -52,6 +75,7 @@ class IncomingMessageType(str, Enum):
 
 class IncomingMessage(BaseModel):
     type: IncomingMessageType
+    session_id: str
     agent_id: str
     text: str
 

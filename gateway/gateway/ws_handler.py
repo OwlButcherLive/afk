@@ -2,7 +2,7 @@
 
 Handles /ws/chat connections:
 - Receives user messages over WebSocket
-- Persists them
+- Persists them with session association
 - Emits typing events
 - Generates stub agent replies
 - Persists replies and sends them back
@@ -89,6 +89,18 @@ async def handle_chat_ws(websocket: WebSocket) -> None:
                 )
                 continue
 
+            # Validate session
+            session = await db.get_session(msg.session_id)
+            if session is None:
+                await websocket.send_text(
+                    ErrorEvent(
+                        code="session_not_found",
+                        message=f"Session '{msg.session_id}' not found",
+                    ).model_dump_json()
+                )
+                logger.warning(f"Unknown session: {msg.session_id}")
+                continue
+
             # Validate agent exists
             agent = await db.get_agent(msg.agent_id)
             if agent is None:
@@ -105,6 +117,7 @@ async def handle_chat_ws(websocket: WebSocket) -> None:
             user_ts = utc_now()
             user_message = await db.save_message(
                 message_id=user_msg_id,
+                session_id=msg.session_id,
                 agent_id=msg.agent_id,
                 role=MessageRole.user,
                 text=msg.text,
@@ -136,6 +149,7 @@ async def handle_chat_ws(websocket: WebSocket) -> None:
             reply_ts = utc_now()
             agent_message = await db.save_message(
                 message_id=reply_msg_id,
+                session_id=msg.session_id,
                 agent_id=msg.agent_id,
                 role=MessageRole.agent,
                 text=reply_text,
@@ -160,6 +174,7 @@ async def handle_chat_ws(websocket: WebSocket) -> None:
 
             logger.info(
                 f"Chat message processed: agent={msg.agent_id}, "
+                f"session={msg.session_id}, "
                 f"user_len={len(msg.text)}, reply_len={len(reply_text)}"
             )
 

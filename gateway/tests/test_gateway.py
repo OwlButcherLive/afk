@@ -16,6 +16,19 @@ import urllib.error
 
 BASE = "http://127.0.0.1:3344"
 
+# Create a session once for WS tests
+def _create_default_session() -> str:
+    """Create a session and return its ID."""
+    req = urllib.request.Request(
+        f"{BASE}/chat/sessions",
+        data=json.dumps({"agent_id": "default"}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    resp = urllib.request.urlopen(req)
+    data = json.loads(resp.read())
+    return data["id"]
+
 
 def test_rest():
     print("--- REST tests ---")
@@ -47,6 +60,31 @@ def test_rest():
         assert e.code == 404
         print("  ✅ GET /chat/history (404 for unknown agent)")
 
+    # Sessions
+    resp = urllib.request.urlopen(f"{BASE}/chat/sessions")
+    data = json.loads(resp.read())
+    assert "sessions" in data
+    assert len(data["sessions"]) >= 1
+    print("  ✅ GET /chat/sessions")
+
+    # Create session
+    sess_id = _create_default_session()
+    assert sess_id.startswith("sess_")
+    print("  ✅ POST /chat/sessions (created)")
+
+    # Get session by ID
+    resp = urllib.request.urlopen(f"{BASE}/chat/sessions/{sess_id}")
+    data = json.loads(resp.read())
+    assert data["id"] == sess_id
+    assert data["agent_id"] == "default"
+    print("  ✅ GET /chat/sessions/{id}")
+
+    # History by session (should be empty for new session)
+    resp = urllib.request.urlopen(f"{BASE}/chat/history?session={sess_id}&limit=10")
+    data = json.loads(resp.read())
+    assert data == {"messages": []}, f"Session history not empty: {data}"
+    print("  ✅ GET /chat/history?session= (empty)")
+
     print("  ✅ All REST tests passed")
 
 
@@ -69,9 +107,14 @@ async def test_ws():
         assert event["status"] == "online"
         print("  ✅ Initial agent_status event")
 
-        # 2. Send a message
+        # Create a session for WS test
+        sess_id = _create_default_session()
+        print(f"  📋 Using session: {sess_id}")
+
+        # 2. Send a message with session_id
         await ws.send(json.dumps({
             "type": "message",
+            "session_id": sess_id,
             "agent_id": "default",
             "text": "hello"
         }))
@@ -104,8 +147,8 @@ async def test_ws():
         assert "Hello" in events[3]["text"]
         print(f"  ✅ Agent reply received: \"{events[3]['text']}\"")
 
-        # 3. Verify history now has 2 messages
-        resp = urllib.request.urlopen(f"{BASE}/chat/history?agent=default&limit=10")
+        # 3. Verify history now has 2 messages (via session)
+        resp = urllib.request.urlopen(f"{BASE}/chat/history?session={sess_id}&limit=10")
         data = json.loads(resp.read())
         assert len(data["messages"]) == 2
         assert data["messages"][0]["role"] == "user"
