@@ -89,7 +89,6 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
 
                     // Configure networking layers to use the tunnel
                     ApiClient.configureForPort(port)
-                    webSocketClient.connect(port)
 
                     // Share the session state with other features
                     ConnectionSession.activate(
