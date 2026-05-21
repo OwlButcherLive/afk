@@ -16,7 +16,10 @@ import kotlinx.coroutines.flow.receiveAsFlow
 import kotlinx.coroutines.launch
 
 class V2ThreadsViewModel : ViewModel() {
-    private val port = ConnectionSession.remoteApiPort
+    private val port = if (ConnectionSession.isActive && ConnectionSession.tunnelPort > 0)
+        ConnectionSession.tunnelPort
+    else
+        ConnectionSession.remoteApiPort
     private val repository = V2ThreadRepository(port)
 
     private val _state = MutableStateFlow(V2ThreadsUiState())
