@@ -94,9 +94,9 @@ def test_session_continuity_same_session():
             # Consume typing=true
             ws.recv(timeout=10)
             # Consume typing=false
-            ws.recv(timeout=10)
+            ws.recv(timeout=120)
             # Consume response
-            ws.recv(timeout=90)
+            ws.recv(timeout=120)
 
     # Check sessions after — should be exactly +1 from before
     after = httpx.get(f"{BASE}/chat/sessions").json()
@@ -132,8 +132,13 @@ def test_session_continuity_separate_sessions():
             "agent_id": "hermes-agent", "text": "only in session 1",
         })
         ws.send(payload)
-        for _ in range(4):
-            ws.recv(timeout=90)
+        # Consume user echo (fast)
+        ws.recv(timeout=10)
+        # Consume typing=true (fast)
+        ws.recv(timeout=10)
+        # Consume typing=false then agent response (both after Hermes API)
+        for _ in range(2):
+            ws.recv(timeout=120)
 
     # Session 1 should have 2 messages, session 2 should have 0
     h1 = httpx.get(f"{BASE}/chat/history", params={"session": s1}).json()
@@ -169,3 +174,54 @@ def test_deep_probe_ok():
     assert data["available"] is True
     assert data["deep_probe_ok"] is True
     assert "hermes" in data["executable_path"]
+
+
+def test_rapid_fire_same_session():
+    """Simulate the user's exact bug scenario: rapid messages in the same thread.
+
+    Sends 3 messages in quick succession through a single WS connection,
+    then verifies only 1 new session was created and all 6 messages
+    (3 user + 3 agent) are in that single session.
+    """
+    count_before = len(httpx.get(f"{BASE}/chat/sessions").json()["sessions"])
+
+    # Create one session
+    r = httpx.post(f"{BASE}/chat/sessions", json={"agent_id": "hermes-agent"})
+    assert r.status_code == 201
+    session_id = r.json()["id"]
+
+    # Rapid-fire 3 messages in one WS connection (simulating user typing fast)
+    messages = ["first", "second", "third"]
+    with ws_connect(WS) as ws:
+        ws.recv(timeout=5)  # agent_status
+
+        for i, text in enumerate(messages):
+            payload = json.dumps({
+                "type": "message",
+                "session_id": session_id,
+                "agent_id": "hermes-agent",
+                "text": text,
+            })
+            ws.send(payload)
+            # Consume user echo (fast)
+            ws.recv(timeout=10)
+            # Consume typing=true (fast)
+            ws.recv(timeout=10)
+            # Consume typing=false then agent response (both sent after Hermes API,
+            # which takes 20-30s — use generous timeout for the first post-hermes event)
+            for _ in range(2):
+                ws.recv(timeout=120)
+
+    # Verify exactly 1 new session
+    after = httpx.get(f"{BASE}/chat/sessions").json()
+    assert len(after["sessions"]) == count_before + 1, (
+        f"Expected {count_before + 1} sessions, got {len(after['sessions'])}. "
+        "Rapid messages are creating separate sessions!"
+    )
+
+    # Verify all 6 messages in one session
+    h = httpx.get(f"{BASE}/chat/history", params={"session": session_id, "limit": 100}).json()
+    assert len(h["messages"]) == 6, f"Expected 6 messages, got {len(h['messages'])}"
+    assert h["messages"][0]["text"] == "first"
+    assert h["messages"][2]["text"] == "second"
+    assert h["messages"][4]["text"] == "third"

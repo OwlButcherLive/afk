@@ -64,8 +64,17 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     }
 
     init {
-        // Restore cached state so the user sees their last session immediately
-        val cachedMessages = chatCache.loadMessages()
+        // Only restore cached messages if no session context exists (first launch).
+        // LaunchedEffect in ChatScreen dispatches LoadSession, which fetches the
+        // correct history from the server — cached messages from a different session
+        // would be misleading if shown before LoadSession completes.
+        val cachedSessionId = chatCache.getCachedSessionId()
+        val cachedMessages = if (cachedSessionId.isEmpty()) {
+            chatCache.loadMessages()
+        } else {
+            Log.d("SessionTrace", "init — cached msgs from session='$cachedSessionId', deferring to LoadSession")
+            emptyList()
+        }
         val cachedDraft = chatCache.loadDraft()
         if (cachedMessages.isNotEmpty() || cachedDraft.isNotEmpty()) {
             setState {
@@ -229,7 +238,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     )
                 } ?: emptyList()
                 setState { copy(isLoadingHistory = false, messages = messages) }
-                chatCache.saveMessages(messages)
+                chatCache.saveMessages(messages, forSessionId = sessionId)
             } else {
                 setState {
                     copy(
@@ -364,7 +373,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     timestamp = event.timestamp
                 )
                 setState { copy(messages = messages + message, sendError = null) }
-                chatCache.saveMessages(_state.value.messages)
+                val currentSessionId = _state.value.sessionId
+                chatCache.saveMessages(_state.value.messages, forSessionId = currentSessionId)
             }
 
             is ChatEvent.Typing -> {
@@ -441,7 +451,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         webSocketClient.disconnect()
         // Persist any unsaved state
         chatCache.saveDraft(_state.value.inputText)
-        chatCache.saveMessages(_state.value.messages)
+        val sessionIdAtClear = _state.value.sessionId
+        chatCache.saveMessages(_state.value.messages, forSessionId = sessionIdAtClear)
     }
 
     // ─── Helpers ──────────────────────────────────────────────────────────
