@@ -22,7 +22,8 @@ import com.owlbutcherlive.afk.feature.dashboard.presentation.DashboardViewModel
 @Composable
 fun DashboardScreen(
     viewModel: DashboardViewModel = viewModel(),
-    onDisconnected: () -> Unit = {}
+    onDisconnected: () -> Unit = {},
+    onOpenChat: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
@@ -66,6 +67,18 @@ fun DashboardScreen(
 
             // Connection details
             ConnectionDetailsCard(state)
+
+            // Open chat
+            Button(
+                onClick = onOpenChat,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp)
+            ) {
+                Icon(Icons.Default.Chat, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("Open Chat")
+            }
 
             Spacer(modifier = Modifier.weight(1f))
 

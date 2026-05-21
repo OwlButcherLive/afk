@@ -9,13 +9,15 @@ import com.owlbutcherlive.afk.core.ui.theme.AfkTheme
 import com.owlbutcherlive.afk.feature.connection.contract.ConnectionEffect
 import com.owlbutcherlive.afk.feature.connection.ui.ConnectionScreen
 import com.owlbutcherlive.afk.feature.dashboard.ui.DashboardScreen
+import com.owlbutcherlive.afk.feature.chat.ui.ChatScreen
 
 /**
- * Navigation state for the two main screens.
+ * Navigation state for the main screens.
  */
 private sealed interface Screen {
     data object Connection : Screen
     data object Dashboard : Screen
+    data object Chat : Screen
 }
 
 class MainActivity : ComponentActivity() {
@@ -38,6 +40,16 @@ class MainActivity : ComponentActivity() {
                         DashboardScreen(
                             onDisconnected = {
                                 screen = Screen.Connection
+                            },
+                            onOpenChat = {
+                                screen = Screen.Chat
+                            }
+                        )
+                    }
+                    is Screen.Chat -> {
+                        ChatScreen(
+                            onBack = {
+                                screen = Screen.Dashboard
                             }
                         )
                     }
