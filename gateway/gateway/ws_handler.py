@@ -79,18 +79,15 @@ async def _process_v2_compat(
 ) -> dict:
     """Process a message through the V2 compat bridge (new execution path).
 
-    Routes Hermes execution through the V2 thread engine, WorkerPool,
-    and HermesRuntime. Returns a V1-shaped response dict.
+    For Hermes agents: routes through WorkerPool → HermesRuntime.
+    For stub agents: creates V2 thread/turn/items, uses inline stub reply.
 
-    Returns:
-        Dict with keys: ok, reply_text, error, send_v1_echo (bool)
-
-    On failure, falls back to the V1 error path.
+    Returns a dict with: ok, reply_text, error, v2_thread_id, v2_turn_id
     """
     from gateway.v2 import compat as v2_compat
 
     try:
-        # Step 1: Map V1 message to V2 thread/turn/user item
+        # Step 1: Map V1 message to V2 thread/turn/user item (always)
         v2_thread_id, v2_turn_id, user_item_id = await v2_compat.map_v1_message_to_thread(
             v1_session_id=session_id,
             v1_agent_id=agent_id,
@@ -101,68 +98,68 @@ async def _process_v2_compat(
             session_id, v2_thread_id, v2_turn_id,
         )
 
-        # Step 2: Dispatch through WorkerPool
-        from gateway.main import get_worker_pool
-        pool = get_worker_pool()
-        dispatch_result = await v2_compat.dispatch_v1_turn(
-            v2_thread_id=v2_thread_id,
-            v2_turn_id=v2_turn_id,
-            worker_pool=pool,
-        )
-
-        if not dispatch_result["ok"]:
-            logger.error(
-                "V2 dispatch failed: thread=%s turn=%s error=%s",
-                v2_thread_id, v2_turn_id, dispatch_result["error"],
+        # Step 2: Generate reply (different path per agent type)
+        if agent_id == "hermes-agent":
+            # Hermes: dispatch through WorkerPool
+            from gateway.main import get_worker_pool
+            pool = get_worker_pool()
+            dispatch_result = await v2_compat.dispatch_v1_turn(
+                v2_thread_id=v2_thread_id,
+                v2_turn_id=v2_turn_id,
+                worker_pool=pool,
             )
-            # Still persist the failure as V2 items
+
+            if not dispatch_result["ok"]:
+                logger.error(
+                    "V2 dispatch failed: thread=%s turn=%s error=%s",
+                    v2_thread_id, v2_turn_id, dispatch_result["error"],
+                )
+                await v2_compat.persist_agent_reply(
+                    v2_thread_id, v2_turn_id,
+                    reply_text=f"⚠️ Agent error: {dispatch_result['error']}",
+                    error=dispatch_result["error"],
+                )
+                ws_response = await v2_compat.map_v1_ws_response(
+                    v2_thread_id, v2_turn_id,
+                    reply_text=f"⚠️ Agent error: {dispatch_result['error']}",
+                    error=dispatch_result["error"],
+                )
+                return {
+                    "ok": False,
+                    "reply_text": ws_response["text"],
+                    "error": dispatch_result["error"],
+                    "v2_thread_id": v2_thread_id,
+                    "v2_turn_id": v2_turn_id,
+                }
+
+            reply_text = dispatch_result["reply_text"]
             await v2_compat.persist_agent_reply(
                 v2_thread_id, v2_turn_id,
-                reply_text=f"⚠️ Agent error: {dispatch_result['error']}",
-                error=dispatch_result["error"],
+                reply_text=reply_text,
             )
-            ws_response = await v2_compat.map_v1_ws_response(
+        else:
+            # Stub: use inline reply, persist to V2
+            reply_text = _stub_reply(text)
+            await v2_compat.persist_agent_reply(
                 v2_thread_id, v2_turn_id,
-                reply_text=f"⚠️ Agent error: {dispatch_result['error']}",
-                error=dispatch_result["error"],
+                reply_text=reply_text,
             )
-            return {
-                "ok": False,
-                "reply_text": ws_response["text"],
-                "error": dispatch_result["error"],
-                "send_v1_echo": True,
-                "v2_thread_id": v2_thread_id,
-                "v2_turn_id": v2_turn_id,
-            }
 
-        # Step 3: Persist runtime items (the HermesRuntime produces ThreadItems)
-        from gateway.v2.worker import WorkerCommandKind, WorkerResult
-        # dispatch_v1_turn returns a dict, not a WorkerResult directly.
-        # The items are already handled by the dispatch flow.
-        # For now, the V2 turn items were produced by HermesRuntime.process_turn()
-        # but not auto-persisted to the store. use persist_runtime_items with the
-        # event if we had it; for now use the legacy persist_agent_reply path.
-        await v2_compat.persist_agent_reply(
-            v2_thread_id, v2_turn_id,
-            reply_text=dispatch_result["reply_text"],
-        )
-
-        # Step 4: Build V1-shaped WS response
+        # Step 3: Build V1-shaped WS response
         ws_response = await v2_compat.map_v1_ws_response(
             v2_thread_id, v2_turn_id,
-            reply_text=dispatch_result["reply_text"],
+            reply_text=reply_text,
         )
 
         logger.info(
-            "V2 compat completed: thread=%s turn=%s duration_ms=%d",
-            v2_thread_id, v2_turn_id, dispatch_result.get("duration_ms", 0),
+            "V2 compat completed: agent=%s thread=%s turn=%s",
+            agent_id, v2_thread_id, v2_turn_id,
         )
 
         return {
             "ok": True,
             "reply_text": ws_response["text"],
             "error": "",
-            "send_v1_echo": True,
             "v2_thread_id": v2_thread_id,
             "v2_turn_id": v2_turn_id,
         }
@@ -172,11 +169,21 @@ async def _process_v2_compat(
             "V2 compat processing failed: session=%s agent=%s error=%s",
             session_id, agent_id, e,
         )
+        # Fallback: generate stub reply for non-Hermes
+        if agent_id != "hermes-agent":
+            return {
+                "ok": False,
+                "reply_text": _stub_reply(text),
+                "error": str(e),
+                "v2_thread_id": "",
+                "v2_turn_id": "",
+            }
         return {
             "ok": False,
             "reply_text": f"⚠️ V2 processing error: {e}",
             "error": str(e),
-            "send_v1_echo": True,
+            "v2_thread_id": "",
+            "v2_turn_id": "",
         }
 
 
@@ -273,34 +280,23 @@ async def handle_chat_ws(websocket: WebSocket) -> None:
             )
 
             # ── Step 3: Generate reply ──
-            # Route through V2 compat for Hermes agents, V1 legacy for stub
-            if msg.agent_id == "hermes-agent" and _hermes_manager is not None:
-                v2_result = await _process_v2_compat(
-                    session_id=msg.session_id,
-                    agent_id=msg.agent_id,
-                    text=msg.text,
-                )
-                reply_text = v2_result["reply_text"]
+            # All messages route through V2 compat (creates thread/turn/items)
+            v2_result = await _process_v2_compat(
+                session_id=msg.session_id,
+                agent_id=msg.agent_id,
+                text=msg.text,
+            )
+            reply_text = v2_result["reply_text"]
+            logger.info(
+                "V2 compat response: ok=%s agent=%s session=%s reply_chars=%d",
+                v2_result.get("ok", False), msg.agent_id, msg.session_id, len(reply_text),
+            )
+
+            # If V2 compat failed, fall back to legacy generation
+            if not v2_result.get("ok") and msg.agent_id != "hermes-agent":
                 logger.info(
-                    "V2 compat response: ok=%s agent=%s session=%s reply_chars=%d",
-                    v2_result["ok"], msg.agent_id, msg.session_id, len(reply_text),
-                )
-            elif _hermes_manager is None and msg.agent_id == "hermes-agent":
-                logger.warning(
-                    "Agent branch: hermes-agent selected but HermesManager is None — "
-                    "returning typed error (session=%s)",
-                    msg.session_id,
-                )
-                reply_text = (
-                    "⚠️ Hermes Agent is not available on the server. "
-                    "The Hermes CLI must be installed and configured. "
-                    "Check /agents/hermes-agent/status for details."
-                )
-            else:
-                # Standard stub reply for non-Hermes agents
-                logger.info(
-                    "Agent branch: stub — agent_id=%s (session=%s)",
-                    msg.agent_id, msg.session_id,
+                    "V2 compat unavailable for stub, using legacy: agent=%s",
+                    msg.agent_id,
                 )
                 reply_text = _stub_reply(msg.text)
 

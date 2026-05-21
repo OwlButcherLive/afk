@@ -515,6 +515,77 @@ async def get_v1_history(
     return messages
 
 
+async def get_v1_history_by_agent(
+    v1_agent_id: str,
+    limit: int = 50,
+) -> list[dict]:
+    """Produce V1-style history from V2 thread items by agent.
+
+    Scans all V2 threads for the given runtime_kind and returns
+    aggregated items in timestamp order.
+
+    This supports the V1 'GET /chat/history?agent=X' endpoint.
+    """
+    server_id = await ensure_default_server_session()
+    threads = await list_threads_for_session(server_id, limit=50)
+
+    # Map V1 agent IDs to V2 runtime kinds
+    agent_to_runtime = {
+        "hermes-agent": "hermes",
+        "default": "stub",
+    }
+    runtime_kind = agent_to_runtime.get(v1_agent_id, v1_agent_id)
+
+    all_messages: list[dict] = []
+    for t in threads:
+        thread_runtime = t.runtime_kind.value if hasattr(t.runtime_kind, 'value') else t.runtime_kind
+        if thread_runtime != runtime_kind:
+            continue
+        items = await ts.list_thread_items(t.id)
+        for item in items:
+            role = "user" if item.role == "user" else "agent"
+            all_messages.append({
+                "id": item.id,
+                "agent_id": thread_runtime,
+                "role": role,
+                "text": item.content,
+                "timestamp": item.created_at,
+            })
+
+    # Sort by timestamp ascending, limit
+    all_messages.sort(key=lambda m: m.get("timestamp", ""))
+    return all_messages[:limit]
+
+
+async def get_v1_session_by_id(
+    v1_session_id: str,
+) -> dict | None:
+    """Produce a V1-style session response from V2 thread data.
+
+    Returns a dict matching the SessionResponse shape, or None
+    if the session has no V2 mapping.
+    """
+    v2_thread_id = _session_to_thread.get(v1_session_id)
+    if v2_thread_id is None:
+        return None
+
+    result = await thread_read(v2_thread_id, include_items=False)
+    if not result.ok or result.thread is None:
+        return None
+
+    t = result.thread
+    runtime_val = t.runtime_kind.value if hasattr(t.runtime_kind, 'value') else t.runtime_kind
+    agent_id = "hermes-agent" if runtime_val == "hermes" else "default"
+
+    return {
+        "id": v1_session_id,
+        "agent_id": agent_id,
+        "title": t.title,
+        "last_message_preview": t.last_message_preview,
+        "updated_at": t.updated_at,
+    }
+
+
 async def map_v1_ws_response(
     v2_thread_id: str,
     v2_turn_id: str,

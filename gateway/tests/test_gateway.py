@@ -14,6 +14,8 @@ import sys
 import urllib.request
 import urllib.error
 
+import pytest
+
 BASE = "http://127.0.0.1:3344"
 
 # Create a session once for WS tests
@@ -88,6 +90,7 @@ def test_rest():
     print("  ✅ All REST tests passed")
 
 
+@pytest.mark.asyncio
 async def test_ws():
     print("\n--- WebSocket tests ---")
     try:

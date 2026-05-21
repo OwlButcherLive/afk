@@ -1,11 +1,17 @@
 """REST router for the Agent Gateway.
 
-Endpoints are gradually migrating from V1 DB to V2 compat:
-  GET /chat/sessions  — V2 compat (with V1 DB fallback for unmapped sessions)
-  GET /chat/history   — V2 compat (via V2 thread items)
-  POST /chat/sessions — V1 DB + eager V2 thread mapping
-  GET /chat/agents    — V1 DB (agents are stable)
-  GET /health         — no change
+All data-reading endpoints are now fully V2-backed:
+  GET /chat/sessions       — V2 compat (thread projection)
+  GET /chat/sessions/{id}  — V2 compat (thread read)
+  GET /chat/history        — V2 compat (thread items)
+  GET /chat/agents         — V1 DB (agents table is stable, not data)
+  POST /chat/sessions      — V1 DB session + eager V2 thread mapping
+  GET /health              — no change
+
+V1 DB remains for:
+- Session validation in ws_handler (existence checks)
+- Agent seeding (stable at startup)
+- Post-creation session persistence (eager V2 thread mapping)
 """
 
 import logging
@@ -112,40 +118,33 @@ async def chat_history(
     agent: str | None = Query("default", description="Agent ID (fallback if no session)"),
     limit: int = Query(50, ge=1, le=200, description="Max messages"),
 ):
-    """Get chat history. Reads from V2 via compat bridge.
+    """Get chat history. Fully V2-backed via compat bridge.
 
-    If the session exists in V2 compat, reads from V2 thread items.
-    Otherwise falls back to V1 DB for backward compatibility.
+    Reads from V2 thread items via compat. Supports both
+    session-based and agent-based queries.
     """
     if session:
-        # Try V2 compat first
+        # Session-based: try V2 compat first
         v2_messages = await v2_compat.get_v1_history(session)
-        if v2_messages:
+        if v2_messages is not None:
             return HistoryResponse(messages=[V1MessageItem(**m) for m in v2_messages])
 
-        # Fallback: check V1 DB
-        sess = await db.get_session(session)
-        if sess is None:
-            raise HTTPException(status_code=404, detail=f"Session '{session}' not found")
-        v1_messages = await db.get_history(session_id=session, limit=limit)
-        return HistoryResponse(messages=[
-            V1MessageItem(id=m.id, agent_id=m.agent_id, role=m.role.value,
-                          text=m.text, timestamp=m.timestamp)
-            for m in v1_messages
-        ])
+        # Not found in V2 — 404
+        raise HTTPException(status_code=404, detail=f"Session '{session}' not found")
     else:
-        # Fallback: V1 DB by agent
-        v1_agent = agent or "default"
+        # Validate agent via V1 DB (agents table is stable)
         all_agents = await db.get_agents()
         agent_ids = {a.id for a in all_agents}
+        v1_agent = agent or "default"
         if v1_agent not in agent_ids:
             raise HTTPException(status_code=404, detail=f"Agent '{v1_agent}' not found")
-        v1_messages = await db.get_history(agent_id=v1_agent, limit=limit)
-        return HistoryResponse(messages=[
-            V1MessageItem(id=m.id, agent_id=m.agent_id, role=m.role.value,
-                          text=m.text, timestamp=m.timestamp)
-            for m in v1_messages
-        ])
+
+        # Agent-based: read from V2 compat across all threads
+        v2_messages = await v2_compat.get_v1_history_by_agent(
+            v1_agent_id=v1_agent,
+            limit=limit,
+        )
+        return HistoryResponse(messages=[V1MessageItem(**m) for m in v2_messages])
 
 
 # ─── Session endpoints (V2-backed) ──────────────────────────────────────────
@@ -191,16 +190,11 @@ async def create_session(req: CreateSessionRequest):
 
 @router.get("/chat/sessions/{session_id}", response_model=SessionResponse)
 async def get_session(session_id: str):
-    """Get a single session by ID. Reads from V1 DB for now."""
-    session = await db.get_session(session_id)
-    if session is None:
+    """Get a single session by ID. Fully V2-backed via compat bridge."""
+    v2_session = await v2_compat.get_v1_session_by_id(session_id)
+    if v2_session is None:
         raise HTTPException(status_code=404, detail=f"Session '{session_id}' not found")
-    return SessionResponse(
-        id=session.id,
-        agent_id=session.agent_id,
-        title=session.title,
-        updated_at=session.updated_at,
-    )
+    return SessionResponse(**v2_session)
 
 
 # ─── Hermes status ──────────────────────────────────────────────────────────

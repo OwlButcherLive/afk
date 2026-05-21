@@ -606,6 +606,21 @@ class TestCompatV2:
         history = asyncio.run(get_v1_history("sess_unknown"))
         assert history == []
 
+    def test_get_v1_history_by_agent_empty(self):
+        """get_v1_history_by_agent returns empty list for unknown agents."""
+        import asyncio
+        from gateway.v2.compat import get_v1_history_by_agent
+        history = asyncio.run(get_v1_history_by_agent("unknown_agent"))
+        assert history == []
+
+    def test_get_v1_session_by_id_unknown(self):
+        """get_v1_session_by_id returns None for unknown session."""
+        import asyncio
+        from gateway.v2.compat import get_v1_session_by_id, clear_mappings
+        clear_mappings()
+        session = asyncio.run(get_v1_session_by_id("sess_unknown"))
+        assert session is None
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # V2 WebSocket — event protocol
