@@ -5,13 +5,14 @@ AFK is an Android application that provides a native dashboard + chat interface 
 
 Current V1 scope:
 - Android app with connection + dashboard + chat UI
-- Remote connection through SSH
+- Remote connection through SSH (SSHJ 0.38.0, Conscrypt on Android 14+)
 - Local port forwarding tunnel to reach the remote Agent Gateway
-- Agent Gateway (FastAPI) running on the Debian host
+- Agent Gateway (FastAPI + SQLite) running on the Debian host
 - REST + WebSocket communication through the SSH tunnel
 - Session-based conversations with resume and agent selection
 - Session list with create/reopen flows
 - Real remote agent integration (Hermes Agent CLI via subprocess)
+- Local message cache (ChatCache) for UI continuity across restarts
 
 Repository root:
 - Work from the afk/ directory
@@ -57,11 +58,12 @@ Use these choices unless there is a build-breaking reason not to.
 - UI: Jetpack Compose only
 - UI architecture: MVI / UDF
 - State: ViewModel + StateFlow + Coroutines
-- REST: Retrofit
+- REST: Retrofit (Gson converter)
 - Realtime: OkHttp WebSocket
-- SSH: Prefer SSHJ, fallback to JSch only if required by Android compatibility or build stability
+- SSH: SSHJ 0.38.0 (Bouncy Castle disabled — Conscrypt on Android 14+)
 - Secret storage: EncryptedSharedPreferences backed by Android Keystore master key
 - Build tool: Gradle Kotlin DSL
+- Gateway: FastAPI + aiosqlite + websockets (Python 3.11+)
 
 ## Package and Module Conventions
 Keep naming simple, explicit, and boring.
@@ -79,12 +81,15 @@ Suggested package layout:
 - data/
 - domain/
 - feature/connection/
+- feature/dashboard/
+- feature/sessions/
+- feature/chat/
 
 Inside features, prefer:
-- contract/
-- ui/
-- presentation/
-- data/
+- contract/   — sealed interfaces for intent, ui state, effects
+- ui/         — composables
+- presentation/  — ViewModel
+- data/       — API wrappers (if feature-specific)
 
 Do not create deep package trees without clear value.
 
@@ -146,6 +151,9 @@ Recommended validation commands when relevant:
 
 If a command is unavailable in the repo yet, add only what is necessary and keep the project buildable.
 
+Gateway test (run from gateway/ directory):
+    pip install -r requirements.txt && python -m pytest tests/test_gateway.py -v
+
 ## Mandatory Autonomous Loop
 For every meaningful phase or milestone, follow this exact order:
 
@@ -171,6 +179,7 @@ Preferred commit style:
 - refactor(core): simplify connection state model
 - docs: update setup instructions
 - ci: add assembleDebug workflow
+- fix(routing): prevent race condition with wrong agent selection
 
 Before every commit:
 - Build must pass
@@ -194,7 +203,13 @@ Work in this order unless a technical issue requires a small reordering.
 6. Connection screen in Compose
 7. UI feedback and error handling
 8. Basic repository wiring
-|10. Hermes Agent integration — real remote CLI agent endpoint
+9. Gateway: FastAPI server with stub agent + REST + WebSocket
+10. Android: message list + chat UI with MVI
+11. Android: session list + agent picker dialog
+12. Gateway: session-based conversations (CRUD + WS association)
+13. Gateway: Hermes Agent integration via subprocess CLI adapter
+14. Fix: connection+agent race condition on session load
+15. Fix: thread agentId through navigation chain
 
 ## Definition of Done for V1
 V1 is done only when all the following are true:
@@ -209,6 +224,32 @@ V1 is done only when all the following are true:
 - Sensitive local data is handled through a secure storage strategy
 - The codebase is structured for future multi-agent support
 - The repository history contains coherent commits
+- A user can create a session with a real agent (Hermes CLI) and receive real responses
+- Hermes readiness is validated and observable via the status endpoint
+
+## Known Fixed Bugs
+Documented here for future reference:
+
+1. **Race condition: agent_id="default" on session load** (fix: 7bc5d82)
+   - ChatViewModel.init() -> loadInitialData() set currentAgent="default" and connected WS
+   - LoadSession cleared messages but NOT connectionState/currentAgent
+   - User could send a message with agent_id="default" -> stub reply
+   - Fix: reset connectionState=Connecting, currentAgent=null in LoadSession setState copy
+
+2. **agentId not threaded through navigation** (fix: d4286d5)
+   - Sessions have agent_id in the API but it was dropped in navigation (Screen.Chat, LoadSession intent, SessionsEffect)
+   - ChatViewModel made a separate API call (fetchSessionAgentId) which failed when tunnel was down
+   - Fix: pass agentId through 7 files: Screen.Chat -> ChatScreen -> ChatViewModel.LoadSession
+
+3. **Gateway env override stripped PATH** (fix: 7bc5d82)
+   - env={"HERMES_YOLO_MODE":"1"} replaced the entire environment
+   - Hermes subprocess couldn't find bare "hermes" executable
+   - Fix: augment os.environ instead: dict(os.environ) | {"HERMES_YOLO_MODE":"1"}
+
+4. **Short answer fallback to raw output** (fix: 7bc5d82)
+   - _extract_response fell back to raw output (with warning banners) when result <5 chars
+   - A valid answer like "4" returned "⚠️  Normalized model...\ndeepseek.\n4"
+   - Fix: only fall back to raw when result is empty
 
 ## Reporting Format
 After each milestone, provide a short factual report:
@@ -239,3 +280,5 @@ Do not spend time on these unless they become necessary for buildability:
 - public API exposure
 - complex offline mode
 - visual polish beyond a clean usable baseline
+- Hermes persistent sessions via tmux (stateless subprocess is fine for V1)
+- streaming response chunks via WebSocket
