@@ -377,6 +377,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val text = _state.value.inputText.trim()
         if (text.isEmpty()) return
 
+        val sessionId = _state.value.sessionId
+        if (sessionId.isEmpty()) {
+            Log.e(TAG, "sendMessage attempted with empty sessionId — blocking send")
+            setSendError("No active session. Please create or select a session first.")
+            return
+        }
+
         val agentId = _state.value.currentAgent?.id ?: "default"
 
         // Check connection BEFORE clearing input so the user doesn't lose their draft
@@ -389,7 +396,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // Clear input immediately
         setState { copy(inputText = "", sendError = null) }
 
-        val sessionId = _state.value.sessionId
+        Log.d(TAG, "Sending message to session=$sessionId agent=$agentId text_len=${text.length}")
         val payload = ChatProtocol.createMessage(sessionId, agentId, text)
         val sent = webSocketClient.send(payload)
         if (!sent) {

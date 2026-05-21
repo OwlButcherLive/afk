@@ -100,6 +100,10 @@ async def handle_chat_ws(websocket: WebSocket) -> None:
 
             # Validate session
             session = await db.get_session(msg.session_id)
+            logger.info(
+                "WS message: session=%s agent=%s text_len=%d — session_exists=%s",
+                msg.session_id, msg.agent_id, len(msg.text), session is not None,
+            )
             if session is None:
                 await websocket.send_text(
                     ErrorEvent(
