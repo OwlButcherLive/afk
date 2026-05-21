@@ -15,4 +15,6 @@ data class V2ThreadsUiState(
     val wsConnected: Boolean = false,
     val showDebug: Boolean = true,
     val inputText: String = "",
+    val healthState: String = "unknown",
+    val healthDisconnects: Int = 0,
 )

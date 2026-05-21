@@ -40,6 +40,8 @@ class ThreadEventKind(str, Enum):
     approval_requested = "approval_requested"
     approval_resolved = "approval_resolved"
     heartbeat = "thread_heartbeat"
+    item_updated = "thread_item_updated"
+    connection_health_changed = "connection_health_changed"
 
 
 # ─── Event models ───────────────────────────────────────────────────────────
@@ -155,6 +157,32 @@ class ApprovalResolved:
     resolved_at: str = ""
 
 
+@dataclass
+class ThreadItemUpdated:
+    """An existing thread item was updated (content change during streaming)."""
+    kind: str = "thread_item_updated"
+    thread_id: str = ""
+    turn_id: str = ""
+    item: ThreadSnapshotItem | None = None
+    previous_content: str = ""
+    updated_at: str = ""
+
+
+@dataclass
+class ConnectionHealthChanged:
+    """Connection health state changed for a server session.
+
+    Emitted when the HealthMonitor detects a transition between:
+      Connecting, Connected, Unresponsive, Disconnected
+    """
+    kind: str = "connection_health_changed"
+    session_id: str = ""
+    old_state: str = ""
+    new_state: str = ""
+    disconnected_count: int = 0
+    timestamp: str = ""
+
+
 # ─── Event protocol ─────────────────────────────────────────────────────────
 
 
@@ -168,6 +196,8 @@ ThreadEvent = (
     | TurnInterrupted
     | ApprovalRequested
     | ApprovalResolved
+    | ThreadItemUpdated
+    | ConnectionHealthChanged
 )
 
 
@@ -202,6 +232,10 @@ def event_to_dict(event: ThreadEvent) -> dict[str, Any]:
             result[field_name] = [
                 _dataclass_to_dict_or_raw(item) for item in value
             ]
+            continue
+        # Handle nested dataclass fields (e.g. ThreadItemUpdated.item)
+        if hasattr(value, "__dataclass_fields__"):
+            result[field_name] = _dataclass_to_dict_or_raw(value)
             continue
         if value is not None and value != "" and value != 0:
             result[field_name] = value

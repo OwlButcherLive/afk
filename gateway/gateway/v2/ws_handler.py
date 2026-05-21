@@ -55,15 +55,20 @@ from gateway.v2.thread_engine import (
 from gateway.v2.events import (
     event_to_dict,
     ThreadItemAppended,
+    ThreadItemUpdated,
     ThreadSnapshot,
     ThreadSnapshotItem,
     TurnCompleted,
+    ConnectionHealthChanged,
 )
 
 logger = logging.getLogger("gateway.v2.ws")
 
 # Track which clients are subscribed to which threads
 _subscribed_clients: dict[str, set[WebSocket]] = {}  # thread_id -> set of WS
+
+# Track clients subscribed to health events
+_health_subscribers: set[WebSocket] = set()
 
 
 def _add_subscription(thread_id: str, ws: WebSocket) -> None:
@@ -84,6 +89,7 @@ def _remove_client_all_subscriptions(ws: WebSocket) -> None:
     """Remove a client from all subscriptions (on disconnect)."""
     for thread_id in list(_subscribed_clients.keys()):
         _remove_subscription(thread_id, ws)
+    _health_subscribers.discard(ws)
 
 
 async def _broadcast_to_thread(thread_id: str, event: dict, exclude: WebSocket | None = None) -> None:
@@ -99,6 +105,44 @@ async def _broadcast_to_thread(thread_id: str, event: dict, exclude: WebSocket |
             dead.append(ws)
     for ws in dead:
         _remove_subscription(thread_id, ws)
+
+
+async def _broadcast_item_updated(thread_id: str, item: ThreadSnapshotItem, previous_content: str) -> None:
+    """Broadcast a thread_item_updated event to all subscribers of a thread."""
+    from gateway.v2.models import utc_now
+    event = event_to_dict(ThreadItemUpdated(
+        thread_id=thread_id,
+        turn_id=item.turn_id,
+        item=item,
+        previous_content=previous_content,
+        updated_at=utc_now(),
+    ))
+    await _broadcast_to_thread(thread_id, event)
+
+
+async def _broadcast_connection_health(
+    session_id: str,
+    old_state: str,
+    new_state: str,
+    disconnected_count: int = 0,
+) -> None:
+    """Broadcast a connection_health_changed event to all health subscribers."""
+    from gateway.v2.models import utc_now
+    event = event_to_dict(ConnectionHealthChanged(
+        session_id=session_id,
+        old_state=old_state,
+        new_state=new_state,
+        disconnected_count=disconnected_count,
+        timestamp=utc_now(),
+    ))
+    dead: list[WebSocket] = []
+    for ws in _health_subscribers:
+        try:
+            await ws.send_text(json.dumps(event))
+        except Exception:
+            dead.append(ws)
+    for ws in dead:
+        _health_subscribers.discard(ws)
 
 
 async def _send_event(ws: WebSocket, event: dict | str) -> None:
@@ -140,6 +184,30 @@ async def _handle_subscribe(ws: WebSocket, msg: dict) -> dict | None:
         await _send_event(ws, event_to_dict(snapshot))
 
     return _ack(request_id, "subscribed", thread_id=thread_id)
+
+
+async def _handle_subscribe_health(ws: WebSocket, msg: dict) -> dict | None:
+    """Handle subscribe_health command — subscribe to connection health events."""
+    request_id = msg.get("request_id", "")
+    _health_subscribers.add(ws)
+
+    # Send current health state
+    try:
+        from gateway.main import get_health_monitor
+        monitor = get_health_monitor()
+        all_health = monitor.get_all_health()
+        for session_id, state in all_health.items():
+            # Send current state as a health event
+            await _send_event(ws, event_to_dict(ConnectionHealthChanged(
+                session_id=session_id,
+                old_state=state.value,
+                new_state=state.value,
+                timestamp="",
+            )))
+    except Exception:
+        pass
+
+    return _ack(request_id, "health_subscribed")
 
 
 async def _handle_unsubscribe(ws: WebSocket, msg: dict) -> dict | None:
@@ -365,6 +433,7 @@ async def _handle_hello(ws: WebSocket, msg: dict) -> dict | None:
 _HANDLERS = {
     "hello": _handle_hello,
     "subscribe": _handle_subscribe,
+    "subscribe_health": _handle_subscribe_health,
     "unsubscribe": _handle_unsubscribe,
     "start_turn": _handle_start_turn,
     "interrupt_turn": _handle_interrupt_turn,
@@ -424,3 +493,23 @@ async def handle_v2_thread_ws(websocket: WebSocket) -> None:
         pending = tracker.list_pending()
         for req in pending:
             tracker.cancel_request(req.id, reason="v2_ws_disconnect")
+
+
+def wire_health_monitor(monitor) -> None:
+    """Wire a HealthMonitor's state change callback to broadcast via WS.
+
+    Call this during startup after the health monitor is created.
+    """
+    async def _on_health_change(session_id: str, old_state, new_state):
+        disconnected_count = 0
+        record = monitor._sessions.get(session_id)
+        if record:
+            disconnected_count = record.disconnects
+        await _broadcast_connection_health(
+            session_id=session_id,
+            old_state=old_state.value,
+            new_state=new_state.value,
+            disconnected_count=disconnected_count,
+        )
+
+    monitor.set_state_change_callback(_on_health_change)

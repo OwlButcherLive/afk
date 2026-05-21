@@ -454,6 +454,12 @@ private fun DebugPanel(state: V2ThreadsUiState, modifier: Modifier = Modifier) {
                 fontFamily = FontFamily.Monospace,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            Text(
+                text = "Health: ${state.healthState} (disconnects: ${state.healthDisconnects})",
+                style = MaterialTheme.typography.labelSmall,
+                fontFamily = FontFamily.Monospace,
+                color = MaterialTheme.colorScheme.onSurfaceVariant
+            )
         }
     }
 }

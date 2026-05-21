@@ -24,7 +24,7 @@ from gateway.v2.health import HealthMonitor
 from gateway.v2.runtime import HermesRuntime
 from gateway.v2.worker import WorkerPool
 from gateway.ws_handler import handle_chat_ws, set_hermes_manager as ws_set_hermes
-from gateway.v2.ws_handler import handle_v2_thread_ws
+from gateway.v2.ws_handler import handle_v2_thread_ws, wire_health_monitor
 
 # ─── V2 runtime globals (exported for use by router/ws_handler) ──────────────
 
@@ -75,6 +75,7 @@ async def lifespan(app: FastAPI):
     )
     router_set_worker_pool(pool)
     monitor = get_health_monitor()
+    wire_health_monitor(monitor)
     await monitor.start_monitoring()
     logger.info("V2 runtime system initialized (workers: 1, health monitoring: active).")
 

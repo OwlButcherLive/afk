@@ -24,6 +24,7 @@ from gateway.v2.events import (
     ThreadSnapshot,
     ThreadSnapshotItem,
     ThreadItemAppended,
+    ThreadItemUpdated,
     ThreadStatusChanged,
     ThreadEventKind,
     event_to_dict,
@@ -228,6 +229,7 @@ class TestEventModels:
             "turn_failed", "turn_interrupted", "thread_status_changed",
             "thread_title_changed", "thread_archived", "approval_requested",
             "approval_resolved", "thread_heartbeat",
+            "thread_item_updated", "connection_health_changed",
         ]
         assert [k.value for k in kinds] == expected
 
@@ -326,6 +328,42 @@ class TestEventModels:
         assert len(d["items"]) == 1
         assert d["items"][0]["id"] == "i1"
         assert d["last_message_preview"] == "hi"
+
+    def test_item_updated_event_to_dict(self):
+        """ThreadItemUpdated serializes correctly."""
+        item = ThreadSnapshotItem(
+            id="i1", turn_id="tu1", turn_index=0,
+            kind="agent_message", index=1, role="agent",
+            content="updated content", created_at=utc_now(),
+        )
+        evt = ThreadItemUpdated(
+            thread_id="t1", turn_id="tu1",
+            item=item, previous_content="old content",
+            updated_at=utc_now(),
+        )
+        d = event_to_dict(evt)
+        assert d["type"] == "thread_item_updated"
+        assert d["thread_id"] == "t1"
+        assert d["turn_id"] == "tu1"
+        assert d["previous_content"] == "old content"
+        assert d["item"]["content"] == "updated content"
+
+    def test_connection_health_changed_event_to_dict(self):
+        """ConnectionHealthChanged serializes correctly."""
+        from gateway.v2.events import ConnectionHealthChanged
+        evt = ConnectionHealthChanged(
+            session_id="srv_test",
+            old_state="connected",
+            new_state="unresponsive",
+            disconnected_count=1,
+            timestamp=utc_now(),
+        )
+        d = event_to_dict(evt)
+        assert d["type"] == "connection_health_changed"
+        assert d["session_id"] == "srv_test"
+        assert d["old_state"] == "connected"
+        assert d["new_state"] == "unresponsive"
+        assert d["disconnected_count"] == 1
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -651,7 +689,7 @@ class TestV2WSEventProtocol:
     def test_handler_registry(self):
         """_HANDLERS has expected commands."""
         from gateway.v2.ws_handler import _HANDLERS
-        expected = {"hello", "subscribe", "unsubscribe", "start_turn", "interrupt_turn", "request_snapshot"}
+        expected = {"hello", "subscribe", "subscribe_health", "unsubscribe", "start_turn", "interrupt_turn", "request_snapshot"}
         assert set(_HANDLERS.keys()) == expected
 
     def test_subscription_tracking(self):

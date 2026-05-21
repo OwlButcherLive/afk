@@ -81,6 +81,14 @@ object V2Protocol {
         ))
     }
 
+    /** Create a "subscribe_health" command — subscribe to connection health events. */
+    fun subscribeHealth(requestId: String = ""): String {
+        return gson.toJson(mapOf(
+            "type" to "subscribe_health",
+            "request_id" to requestId,
+        ))
+    }
+
     // ─── Server events (incoming parsing) ───────────────────────────────
 
     /**
@@ -153,6 +161,24 @@ object V2Protocol {
 
         data class Pong(
             val requestId: String,
+        ) : V2Event()
+
+        data class ItemUpdated(
+            val requestId: String?,
+            val threadId: String,
+            val turnId: String,
+            val item: V2Item,
+            val previousContent: String,
+            val updatedAt: String,
+        ) : V2Event()
+
+        data class ConnectionHealthChanged(
+            val requestId: String?,
+            val sessionId: String,
+            val oldState: String,
+            val newState: String,
+            val disconnectedCount: Int = 0,
+            val timestamp: String,
         ) : V2Event()
 
         /** Unknown/unhandled event type. */
@@ -253,6 +279,27 @@ object V2Protocol {
                 )
 
                 "pong" -> V2Event.Pong(requestId = requestId)
+
+                "item_updated", "thread_item_updated" -> V2Event.ItemUpdated(
+                    requestId = requestId.ifEmpty { null },
+                    threadId = threadId,
+                    turnId = json.get("turn_id")?.asString ?: "",
+                    item = parseItem(json.getAsJsonObject("item")) ?: V2Item(
+                        id = "", turnId = "", turnIndex = 0, kind = "", index = 0,
+                        role = "", content = "", createdAt = "",
+                    ),
+                    previousContent = json.get("previous_content")?.asString ?: "",
+                    updatedAt = json.get("updated_at")?.asString ?: "",
+                )
+
+                "connection_health_changed" -> V2Event.ConnectionHealthChanged(
+                    requestId = requestId.ifEmpty { null },
+                    sessionId = json.get("session_id")?.asString ?: "",
+                    oldState = json.get("old_state")?.asString ?: "",
+                    newState = json.get("new_state")?.asString ?: "",
+                    disconnectedCount = json.get("disconnected_count")?.asInt ?: 0,
+                    timestamp = json.get("timestamp")?.asString ?: "",
+                )
 
                 else -> V2Event.Unknown(rawType = type, rawJson = raw)
             }

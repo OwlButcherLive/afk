@@ -77,4 +77,8 @@ class V2ThreadRepository(private val port: Int) {
     fun sendHeartbeat() {
         ws.send(V2Protocol.heartbeat())
     }
+
+    fun subscribeHealth() {
+        ws.send(V2Protocol.subscribeHealth())
+    }
 }

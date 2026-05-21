@@ -99,6 +99,7 @@ class V2ThreadsViewModel : ViewModel() {
             result.fold(
                 onSuccess = {
                     repository.sendHello()
+                    repository.subscribeHealth()
                     _state.value = _state.value.copy(
                         wsConnected = true,
                         statusMessage = "WS connected",
@@ -179,6 +180,23 @@ class V2ThreadsViewModel : ViewModel() {
             }
             is V2Event.Pong -> {
                 _state.value = _state.value.copy(statusMessage = "Heartbeat OK")
+            }
+            is V2Event.ItemUpdated -> {
+                // Replace item in the messages list by id
+                val updated = _state.value.messages.map { msg ->
+                    if (msg.id == event.item.id) event.item else msg
+                }
+                _state.value = _state.value.copy(
+                    messages = updated,
+                    statusMessage = "Item updated: ${event.item.id}",
+                )
+            }
+            is V2Event.ConnectionHealthChanged -> {
+                _state.value = _state.value.copy(
+                    healthState = event.newState,
+                    healthDisconnects = event.disconnectedCount,
+                    statusMessage = "Health: ${event.oldState} → ${event.newState}",
+                )
             }
             else -> {}
         }
