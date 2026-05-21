@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+    Backup rules for AFK.
+
+    Exclude EncryptedSharedPreferences from Auto Backup / Cloud Restore:
+    the master key stored in Android Keystore may not survive device migration
+    or factory reset, making encrypted preference values undecryptable on restore.
+-->
+<full-backup-content>
+    <exclude domain="sharedpref" path="afk_secure_prefs.xml"/>
+</full-backup-content>

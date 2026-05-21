@@ -6,11 +6,18 @@ import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 
 /**
- * Handles secure storage of sensitive credentials using Android Keystore.
+ * Persists sensitive credentials via EncryptedSharedPreferences.
  *
- * Passwords, private keys, and host secrets are encrypted at rest.
- * Plain ConnectionConfig fields (host, port, username) are stored in
- * regular SharedPreferences (they are not secrets).
+ * The encryption master key is stored in Android Keystore (non-exportable,
+ * AES-256 GCM). Secret values — passwords, private keys, passphrases —
+ * are stored as encrypted preference values (AES-256 GCM content,
+ * AES-256 SIV key names, both scoped to the Keystore-protected master key).
+ *
+ * Non-sensitive connection metadata (host, port, username, UI preferences)
+ * is stored in regular SharedPreferences.
+ *
+ * This is NOT "secrets in Android Keystore" — the Keystore holds the key,
+ * not the secrets themselves. The description above is the accurate model.
  */
 class SecretStorage(context: Context) {
 

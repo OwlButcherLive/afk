@@ -56,7 +56,7 @@ Use these choices unless there is a build-breaking reason not to.
 - REST: Retrofit
 - Realtime: OkHttp WebSocket
 - SSH: Prefer SSHJ, fallback to JSch only if required by Android compatibility or build stability
-- Secret storage: Android Keystore
+- Secret storage: EncryptedSharedPreferences backed by Android Keystore master key
 - Build tool: Gradle Kotlin DSL
 
 ## Package and Module Conventions
