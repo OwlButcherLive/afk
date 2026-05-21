@@ -20,7 +20,29 @@ from gateway import database as db
 from gateway.hermes_manager import HermesManager
 from gateway.router import router, set_hermes_manager as router_set_hermes
 from gateway.v2 import database as v2db
+from gateway.v2.health import HealthMonitor
+from gateway.v2.runtime import HermesRuntime
+from gateway.v2.worker import WorkerPool
 from gateway.ws_handler import handle_chat_ws, set_hermes_manager as ws_set_hermes
+
+# ─── V2 runtime globals (exported for use by router/ws_handler) ──────────────
+
+worker_pool: WorkerPool | None = None
+health_monitor: HealthMonitor | None = None
+
+
+def get_worker_pool() -> WorkerPool:
+    global worker_pool
+    if worker_pool is None:
+        worker_pool = WorkerPool()
+    return worker_pool
+
+
+def get_health_monitor() -> HealthMonitor:
+    global health_monitor
+    if health_monitor is None:
+        health_monitor = HealthMonitor()
+    return health_monitor
 
 logging.basicConfig(
     level=logging.INFO,
@@ -44,9 +66,21 @@ async def lifespan(app: FastAPI):
     ws_set_hermes(hermes)
     logger.info("Hermes Agent manager initialized.")
 
+    # Initialize V2 runtime system
+    pool = get_worker_pool()
+    await pool.register(
+        kind="hermes",
+        runtime_factory=lambda: HermesRuntime(hermes),
+    )
+    monitor = get_health_monitor()
+    await monitor.start_monitoring()
+    logger.info("V2 runtime system initialized (workers: 1, health monitoring: active).")
+
     yield
 
     # Shutdown
+    await monitor.stop_monitoring()
+    await pool.shutdown_all()
     await hermes.cleanup()
     logger.info("Gateway shutting down.")
 
