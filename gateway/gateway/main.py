@@ -19,6 +19,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from gateway import database as db
 from gateway.hermes_manager import HermesManager
 from gateway.router import router, set_hermes_manager as router_set_hermes
+from gateway.v2 import database as v2db
 from gateway.ws_handler import handle_chat_ws, set_hermes_manager as ws_set_hermes
 
 logging.basicConfig(
@@ -33,6 +34,7 @@ async def lifespan(app: FastAPI):
     """Initialize database on startup, clean up on shutdown."""
     logger.info("Initializing database...")
     db.init_db()
+    v2db.init_v2_schema()
     logger.info("Database ready.")
 
     # Initialize Hermes Agent manager
