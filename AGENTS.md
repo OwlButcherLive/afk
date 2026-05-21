@@ -9,7 +9,8 @@ Current V1 scope:
 - Local port forwarding tunnel to reach the remote Agent Gateway
 - Agent Gateway (FastAPI) running on the Debian host
 - REST + WebSocket communication through the SSH tunnel
-- Basic chat with stub agent responses
+- Session-based conversations with resume and agent selection
+- Session list with create/reopen flows
 
 Repository root:
 - Work from the afk/ directory
