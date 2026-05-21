@@ -4,15 +4,17 @@
 AFK is an Android application that provides a native dashboard + chat interface to manage AI agents running on a remote Debian server.
 
 Current V1 scope:
-- Android app only
+- Android app with connection + dashboard + chat UI
 - Remote connection through SSH
 - Local port forwarding tunnel to reach the remote Agent Gateway
-- Basic connection UI
-- Foundations for REST + WebSocket communication through the SSH tunnel
+- Agent Gateway (FastAPI) running on the Debian host
+- REST + WebSocket communication through the SSH tunnel
+- Basic chat with stub agent responses
 
 Repository root:
 - Work from the afk/ directory
 - Android package: com.owlbutcherlive.afk
+- Gateway server: under gateway/ (FastAPI + SQLite)
 
 ## Product Intent
 AFK is not a terminal emulator.
