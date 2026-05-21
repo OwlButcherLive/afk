@@ -193,12 +193,12 @@ def event_to_dict(event: ThreadEvent) -> dict[str, Any]:
         if field_name == "kind":
             continue
         value: Any = getattr(event, field_name)
-        if isinstance(value, dict) and not value:
+        if isinstance(value, dict):
+            # Always include dict fields — metadata is meaningful even when empty
+            result[field_name] = value
             continue
         if isinstance(value, list):
-            if not value:
-                continue
-            # Convert dataclass items to dicts if needed
+            # Always include list fields, even empty — empty items is meaningful
             result[field_name] = [
                 _dataclass_to_dict_or_raw(item) for item in value
             ]
