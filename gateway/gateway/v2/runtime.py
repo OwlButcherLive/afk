@@ -8,6 +8,7 @@ Design:
 - Runtimes are owned by ServerSessionRuntime
 - Each thread is routed to one runtime via ThreadRuntimeRoute
 - The runtime receives a fully reconstructed Turn context (not bare messages)
+- process_turn() returns RuntimeEvent with structured ThreadItem objects
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from __future__ import annotations
 import abc
 import logging
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, Callable
 
 if TYPE_CHECKING:
     from gateway.v2.models import ThreadItem, Turn
@@ -35,12 +36,20 @@ class RuntimeCommand:
 
 @dataclass
 class RuntimeEvent:
-    """An event emitted by an AgentRuntime."""
+    """An event emitted by an AgentRuntime.
+
+    The ``items`` field contains structured ThreadItem objects
+    (not bare strings) so callers can persist them directly.
+    """
     kind: str  # "turn_completed", "turn_failed", "item_produced", "approval_requested"
     turn_id: str = ""
     items: list = field(default_factory=list)
     error: str = ""
     metadata: dict = field(default_factory=dict)
+
+    @property
+    def ok(self) -> bool:
+        return self.kind in ("turn_completed", "item_produced")
 
 
 # ─── AgentRuntime trait ─────────────────────────────────────────────────────
@@ -81,7 +90,27 @@ class AgentRuntime(abc.ABC):
             prior_items: All ThreadItems from prior turns (for context).
 
         Returns:
-            RuntimeEvent with completed items or failure.
+            RuntimeEvent with completed ThreadItems or failure.
+        """
+        ...
+
+    @abc.abstractmethod
+    async def process_turn_streaming(
+        self,
+        turn: Turn,
+        prior_items: list[ThreadItem],
+        item_callback: Callable | None = None,
+    ) -> RuntimeEvent:
+        """Process a turn with streaming support.
+
+        Args:
+            turn: The current turn being processed.
+            prior_items: Prior ThreadItems for context.
+            item_callback: Optional async callback called as each ThreadItem
+                is produced during streaming.
+
+        Returns:
+            RuntimeEvent with all ThreadItems produced during the turn.
         """
         ...
 
@@ -114,8 +143,9 @@ class HermesRuntime(AgentRuntime):
 
     Wraps the existing HermesManager but adopts the V2 contract:
     - Receives Turn + prior_items instead of raw text
-    - Produces structured ThreadItems (user_message, agent_message)
+    - Produces structured ThreadItems (user_message, agent_message, system_event)
     - Supports interruption and reset
+    - Returns items as actual ThreadItem dataclass instances
     """
 
     def __init__(self, manager):
@@ -132,6 +162,69 @@ class HermesRuntime(AgentRuntime):
         await self._manager.initialize()
         logger.info("HermesRuntime initialized via existing HermesManager")
 
+    async def _build_thread_items(
+        self,
+        turn: Turn,
+        prior_items: list[ThreadItem],
+        user_text: str,
+        reply_text: str,
+        is_error: bool = False,
+        metadata: dict | None = None,
+    ) -> list:
+        """Build ThreadItem objects from a completed Hermes response.
+
+        Returns structured items that can be persisted directly.
+        """
+        from gateway.v2.models import ThreadItem as V2ThreadItem, ThreadItemKind, utc_now
+
+        items = []
+        ts = utc_now()
+
+        # User message item (captures what was sent)
+        user_item = V2ThreadItem(
+            id=f"rt_user_{turn.id[:8]}",
+            thread_id=turn.thread_id,
+            turn_id=turn.id,
+            kind=ThreadItemKind.user_message,
+            index=0,
+            role="user",
+            content=user_text,
+            metadata={"runtime": "hermes", "generated": True},
+            created_at=ts,
+        )
+        items.append(user_item)
+
+        if is_error:
+            # System event for errors
+            error_item = V2ThreadItem(
+                id=f"rt_err_{turn.id[:8]}",
+                thread_id=turn.thread_id,
+                turn_id=turn.id,
+                kind=ThreadItemKind.system_event,
+                index=1,
+                role="system",
+                content=reply_text,
+                metadata=metadata or {},
+                created_at=ts,
+            )
+            items.append(error_item)
+        else:
+            # Agent message item
+            agent_item = V2ThreadItem(
+                id=f"rt_agent_{turn.id[:8]}",
+                thread_id=turn.thread_id,
+                turn_id=turn.id,
+                kind=ThreadItemKind.agent_message,
+                index=1,
+                role="agent",
+                content=reply_text,
+                metadata=metadata or {},
+                created_at=ts,
+            )
+            items.append(agent_item)
+
+        return items
+
     async def process_turn(
         self,
         turn: Turn,
@@ -140,28 +233,26 @@ class HermesRuntime(AgentRuntime):
         self._busy = True
         self._current_turn_id = turn.id
 
-        # Find the user message in the turn
-        user_msg = next(
-            (item for item in prior_items if item.id == turn.user_message_id),
-            None,
-        )
-        if user_msg is None:
-            # Fall back: look for any user_message item in the turn's items
-            # For V1 compat, just use what we have
-            text = turn.user_message_id or ""
+        # Find the user message text
+        if turn.user_message_id:
+            user_msg = next(
+                (item for item in prior_items if item.id == turn.user_message_id),
+                None,
+            )
+            text = user_msg.content if user_msg else turn.user_message_id
         else:
-            text = user_msg.content
+            text = turn.user_message_id or ""
 
-        # Build context from prior items
+        # Build context from prior items (user + agent messages only, not generated runtime items)
         context_messages = [
             m for m in prior_items
             if m.kind in ("user_message", "agent_message")
+            and not m.metadata.get("generated")
         ]
 
         # Dispatch to Hermes via existing manager
         from gateway.models import Message, MessageRole
 
-        # Convert V2 items to V1 Messages for the context builder
         hermes_context = []
         for item in context_messages:
             role = MessageRole.user if item.role == "user" else MessageRole.agent
@@ -173,7 +264,6 @@ class HermesRuntime(AgentRuntime):
                 timestamp=item.created_at,
             ))
 
-        # Send the current user text
         result = await self._manager.send_task(
             message=text,
             timeout=120.0,
@@ -183,19 +273,63 @@ class HermesRuntime(AgentRuntime):
         self._busy = False
         self._current_turn_id = ""
 
+        meta = {
+            "runtime": "hermes",
+            "executable": result.executable if result.success else "",
+            "duration_ms": result.duration_ms,
+        }
+
         if result.success:
+            items = await self._build_thread_items(
+                turn=turn,
+                prior_items=prior_items,
+                user_text=text,
+                reply_text=result.text,
+                metadata=meta,
+            )
             return RuntimeEvent(
                 kind="turn_completed",
                 turn_id=turn.id,
-                items=[result.text],
-                metadata={"executable": result.executable, "duration_ms": result.duration_ms},
+                items=items,
+                metadata=meta,
             )
         else:
+            items = await self._build_thread_items(
+                turn=turn,
+                prior_items=prior_items,
+                user_text=text,
+                reply_text=result.error,
+                is_error=True,
+                metadata=meta,
+            )
             return RuntimeEvent(
                 kind="turn_failed",
                 turn_id=turn.id,
+                items=items,
                 error=result.error,
+                metadata=meta,
             )
+
+    async def process_turn_streaming(
+        self,
+        turn: Turn,
+        prior_items: list[ThreadItem],
+        item_callback: Callable | None = None,
+    ) -> RuntimeEvent:
+        """Process a turn with item callback for streaming.
+
+        Currently wraps the non-streaming process_turn and calls the
+        callback with completed items. Future work will make this truly
+        streaming by emitting items mid-execution.
+        """
+        event = await self.process_turn(turn, prior_items)
+        if item_callback and event.items:
+            for item in event.items:
+                try:
+                    await item_callback(item, event.kind)
+                except Exception as e:
+                    logger.warning("Streaming callback failed: %s", e)
+        return event
 
     async def interrupt(self, turn_id: str) -> bool:
         logger.warning("HermesRuntime.interrupt not yet implemented")
