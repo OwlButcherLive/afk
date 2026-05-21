@@ -1,8 +1,5 @@
 package com.owlbutcherlive.afk.feature.chat.ui
 
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -14,7 +11,6 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -33,6 +29,11 @@ fun ChatScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
+
+    // Fire ScreenResumed when the composable enters composition
+    LaunchedEffect(Unit) {
+        viewModel.processIntent(ChatIntent.ScreenResumed)
+    }
 
     // Collect effects (navigation)
     LaunchedEffect(Unit) {
@@ -93,7 +94,7 @@ fun ChatScreen(
                 text = state.inputText,
                 onTextChange = { viewModel.processIntent(ChatIntent.UpdateInput(it)) },
                 onSend = { viewModel.processIntent(ChatIntent.SendMessage) },
-                enabled = state.connectionState == ChatConnectionState.Connected
+                isConnected = state.connectionState == ChatConnectionState.Connected
             )
         }
     ) { padding ->
@@ -123,68 +124,17 @@ fun ChatScreen(
 
                 // History error
                 state.historyError != null -> {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier.padding(32.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.CloudOff,
-                                contentDescription = null,
-                                modifier = Modifier.size(48.dp),
-                                tint = MaterialTheme.colorScheme.error
-                            )
-                            Spacer(Modifier.height(12.dp))
-                            Text(
-                                text = state.historyError ?: "",
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.error,
-                                textAlign = TextAlign.Center
-                            )
-                            Spacer(Modifier.height(16.dp))
-                            OutlinedButton(
-                                onClick = { viewModel.processIntent(ChatIntent.RetryLoadHistory) }
-                            ) {
-                                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
-                                Spacer(Modifier.width(4.dp))
-                                Text("Retry")
-                            }
-                        }
-                    }
+                    ErrorState(
+                        icon = Icons.Default.CloudOff,
+                        message = state.historyError ?: "",
+                        actionLabel = "Retry",
+                        onAction = { viewModel.processIntent(ChatIntent.RetryLoadHistory) }
+                    )
                 }
 
-                // Empty state
+                // Empty state — differentiated by connection status
                 state.messages.isEmpty() && !state.isLoadingHistory -> {
-                    Box(
-                        modifier = Modifier.fillMaxSize(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            modifier = Modifier.padding(32.dp)
-                        ) {
-                            Icon(
-                                Icons.Default.Chat,
-                                contentDescription = null,
-                                modifier = Modifier.size(48.dp),
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                            )
-                            Spacer(Modifier.height(12.dp))
-                            Text(
-                                text = "No messages yet",
-                                style = MaterialTheme.typography.bodyLarge,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant
-                            )
-                            Text(
-                                text = connectionEmptyLabel(state.connectionState),
-                                style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f)
-                            )
-                        }
-                    }
+                    EmptyChatState(state.connectionState)
                 }
 
                 // Message list
@@ -215,18 +165,6 @@ fun ChatScreen(
                 }
             }
 
-            // Connection status banner at bottom of content area
-            AnimatedVisibility(
-                visible = state.connectionState == ChatConnectionState.Connecting ||
-                        state.connectionState == ChatConnectionState.Disconnected ||
-                        state.connectionState == ChatConnectionState.Failed,
-                enter = fadeIn(),
-                exit = fadeOut(),
-                modifier = Modifier.align(Alignment.BottomCenter)
-            ) {
-                ConnectionBanner(state.connectionState)
-            }
-
             // Send error snackbar
             state.sendError?.let { error ->
                 Snackbar(
@@ -234,7 +172,7 @@ fun ChatScreen(
                         .align(Alignment.BottomCenter)
                         .padding(horizontal = 16.dp, vertical = 8.dp),
                     action = {
-                        TextButton(onClick = { /* auto-dismissed on next success */ }) {
+                        TextButton(onClick = { /* dismissed when next message succeeds */ }) {
                             Text("Dismiss")
                         }
                     }
@@ -341,88 +279,161 @@ private fun ChatInputBar(
     text: String,
     onTextChange: (String) -> Unit,
     onSend: () -> Unit,
-    enabled: Boolean
+    isConnected: Boolean
 ) {
     Surface(
         shadowElevation = 4.dp,
         color = MaterialTheme.colorScheme.surface
     ) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(horizontal = 12.dp, vertical = 8.dp)
-                .navigationBarsPadding(),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
-        ) {
-            OutlinedTextField(
-                value = text,
-                onValueChange = onTextChange,
-                placeholder = { Text("Type a message...") },
-                modifier = Modifier.weight(1f),
-                singleLine = true,
-                enabled = enabled,
-                shape = RoundedCornerShape(24.dp)
-            )
+        Column {
+            // Offline warning strip
+            if (!isConnected) {
+                Surface(
+                    color = MaterialTheme.colorScheme.errorContainer,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Text(
+                        text = "Not connected — messages won't be sent",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onErrorContainer,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp)
+                    )
+                }
+            }
 
-            FilledIconButton(
-                onClick = onSend,
-                enabled = enabled && text.isNotBlank(),
-                modifier = Modifier.size(48.dp)
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 12.dp, vertical = 8.dp)
+                    .navigationBarsPadding(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Icon(
-                    Icons.Default.Send,
-                    contentDescription = "Send",
-                    modifier = Modifier.size(20.dp)
+                OutlinedTextField(
+                    value = text,
+                    onValueChange = onTextChange,
+                    placeholder = {
+                        Text(
+                            if (isConnected) "Type a message..."
+                            else "Reconnect to send messages"
+                        )
+                    },
+                    modifier = Modifier.weight(1f),
+                    singleLine = true,
+                    enabled = true, // input is always available
+                    shape = RoundedCornerShape(24.dp)
                 )
+
+                FilledIconButton(
+                    onClick = onSend,
+                    enabled = text.isNotBlank(),
+                    modifier = Modifier.size(48.dp)
+                ) {
+                    Icon(
+                        Icons.Default.Send,
+                        contentDescription = "Send",
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
         }
     }
 }
 
-// ─── Connection banner ─────────────────────────────────────────────────────
+// ─── Empty chat state ──────────────────────────────────────────────────────
 
 @Composable
-private fun ConnectionBanner(state: ChatConnectionState) {
-    val (backgroundColor, text, icon) = when (state) {
+private fun EmptyChatState(connectionState: ChatConnectionState) {
+    val (icon, title, subtitle) = when (connectionState) {
+        ChatConnectionState.Connected -> Triple(
+            Icons.Default.Chat,
+            "No messages yet",
+            "Send a message to start the conversation."
+        )
         ChatConnectionState.Connecting -> Triple(
-            MaterialTheme.colorScheme.tertiaryContainer,
-            "Connecting to chat...",
-            Icons.Default.HourglassEmpty
+            Icons.Default.HourglassEmpty,
+            "Connecting...",
+            "Establishing chat connection."
         )
         ChatConnectionState.Disconnected -> Triple(
-            MaterialTheme.colorScheme.secondaryContainer,
-            "Disconnected",
-            Icons.Default.CloudOff
+            Icons.Default.CloudOff,
+            "Not connected",
+            "Connection was lost. Tap the refresh icon to reconnect."
         )
         ChatConnectionState.Failed -> Triple(
-            MaterialTheme.colorScheme.errorContainer,
+            Icons.Default.ErrorOutline,
             "Connection failed",
-            Icons.Default.Error
+            "Could not reach the gateway. Check the tunnel and try again."
         )
-        else -> return
     }
 
-    Surface(
-        color = backgroundColor,
-        modifier = Modifier.fillMaxWidth()
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
     ) {
-        Row(
-            modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(32.dp)
         ) {
             Icon(
                 icon,
                 contentDescription = null,
-                modifier = Modifier.size(16.dp),
-                tint = MaterialTheme.colorScheme.onSurfaceVariant
+                modifier = Modifier.size(48.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
             )
+            Spacer(Modifier.height(12.dp))
             Text(
-                text = text,
-                style = MaterialTheme.typography.bodySmall,
+                text = title,
+                style = MaterialTheme.typography.bodyLarge,
                 color = MaterialTheme.colorScheme.onSurfaceVariant
             )
+            Spacer(Modifier.height(4.dp))
+            Text(
+                text = subtitle,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.7f),
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+// ─── Error state ───────────────────────────────────────────────────────────
+
+@Composable
+private fun ErrorState(
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    message: String,
+    actionLabel: String,
+    onAction: () -> Unit
+) {
+    Box(
+        modifier = Modifier.fillMaxSize(),
+        contentAlignment = Alignment.Center
+    ) {
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            modifier = Modifier.padding(32.dp)
+        ) {
+            Icon(
+                icon,
+                contentDescription = null,
+                modifier = Modifier.size(48.dp),
+                tint = MaterialTheme.colorScheme.error
+            )
+            Spacer(Modifier.height(12.dp))
+            Text(
+                text = message,
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.error,
+                textAlign = TextAlign.Center
+            )
+            Spacer(Modifier.height(16.dp))
+            OutlinedButton(onClick = onAction) {
+                Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
+                Spacer(Modifier.width(4.dp))
+                Text(actionLabel)
+            }
         }
     }
 }
@@ -433,7 +444,7 @@ private fun connectionStatusLabel(state: ChatConnectionState): String = when (st
     ChatConnectionState.Connected -> "Connected"
     ChatConnectionState.Connecting -> "Connecting..."
     ChatConnectionState.Disconnected -> "Disconnected"
-    ChatConnectionState.Failed -> "Failed"
+    ChatConnectionState.Failed -> "Connection failed"
 }
 
 @Composable
@@ -442,11 +453,4 @@ private fun connectionStatusColor(state: ChatConnectionState) = when (state) {
     ChatConnectionState.Connecting -> MaterialTheme.colorScheme.tertiary
     ChatConnectionState.Disconnected -> MaterialTheme.colorScheme.onSurfaceVariant
     ChatConnectionState.Failed -> MaterialTheme.colorScheme.error
-}
-
-private fun connectionEmptyLabel(state: ChatConnectionState): String = when (state) {
-    ChatConnectionState.Connected -> "Send a message to start the conversation."
-    ChatConnectionState.Connecting -> "Establishing connection..."
-    ChatConnectionState.Disconnected -> "Connection lost."
-    ChatConnectionState.Failed -> "Could not connect to chat."
 }
