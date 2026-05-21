@@ -6,5 +6,6 @@ sealed interface ChatIntent {
     data object Reconnect : ChatIntent
     data object RetryLoadHistory : ChatIntent
     data object ScreenResumed : ChatIntent
+    data object DismissError : ChatIntent
     data object NavigateBack : ChatIntent
 }

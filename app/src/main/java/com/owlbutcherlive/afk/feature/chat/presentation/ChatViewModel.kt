@@ -80,6 +80,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 viewModelScope.launch { loadHistory() }
             }
             ChatIntent.ScreenResumed -> onScreenResumed()
+            ChatIntent.DismissError -> setState { copy(sendError = null) }
             ChatIntent.NavigateBack -> {
                 viewModelScope.launch {
                     _effects.send(ChatEffect.NavigateBack)

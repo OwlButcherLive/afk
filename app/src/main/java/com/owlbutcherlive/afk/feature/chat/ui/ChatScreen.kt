@@ -20,6 +20,10 @@ import com.owlbutcherlive.afk.domain.MessageRole
 import com.owlbutcherlive.afk.feature.chat.contract.ChatConnectionState
 import com.owlbutcherlive.afk.feature.chat.contract.ChatIntent
 import com.owlbutcherlive.afk.feature.chat.presentation.ChatViewModel
+import java.time.Instant
+import java.time.ZoneId
+import java.time.format.DateTimeFormatter
+import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -29,6 +33,13 @@ fun ChatScreen(
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
+    val scope = rememberCoroutineScope()
+    val isScrolledUp by remember {
+        derivedStateOf { listState.canScrollForward }
+    }
+
+    // Only show the FAB when messages are visible and user has scrolled up
+    val showMessages = !state.isLoadingHistory && state.historyError == null && state.messages.isNotEmpty()
 
     // Fire ScreenResumed when the composable enters composition
     LaunchedEffect(Unit) {
@@ -165,6 +176,30 @@ fun ChatScreen(
                 }
             }
 
+            // Scroll-to-bottom FAB
+            if (showMessages && isScrolledUp) {
+                FloatingActionButton(
+                    onClick = {
+                        scope.launch {
+                            listState.animateScrollToItem(state.messages.size - 1)
+                        }
+                    },
+                    modifier = Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 16.dp, bottom = 16.dp),
+                    containerColor = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    elevation = FloatingActionButtonDefaults.elevation(
+                        defaultElevation = 4.dp
+                    )
+                ) {
+                    Icon(
+                        Icons.Default.KeyboardArrowDown,
+                        contentDescription = "Scroll to bottom",
+                        tint = MaterialTheme.colorScheme.onSurface
+                    )
+                }
+            }
+
             // Send error snackbar
             state.sendError?.let { error ->
                 Snackbar(
@@ -172,7 +207,9 @@ fun ChatScreen(
                         .align(Alignment.BottomCenter)
                         .padding(horizontal = 16.dp, vertical = 8.dp),
                     action = {
-                        TextButton(onClick = { /* dismissed when next message succeeds */ }) {
+                        TextButton(
+                            onClick = { viewModel.processIntent(ChatIntent.DismissError) }
+                        ) {
                             Text("Dismiss")
                         }
                     }
@@ -224,7 +261,7 @@ private fun MessageBubble(message: ChatMessage) {
                 )
                 Spacer(Modifier.height(2.dp))
                 Text(
-                    text = message.timestamp.takeLast(8).take(5), // HH:MM from ISO
+                    text = formatTime(message.timestamp),
                     style = MaterialTheme.typography.labelSmall,
                     color = contentColor.copy(alpha = 0.6f),
                     modifier = Modifier.align(if (isUser) Alignment.End else Alignment.Start)
@@ -439,6 +476,22 @@ private fun ErrorState(
 }
 
 // ─── Helpers ───────────────────────────────────────────────────────────────
+
+/**
+ * Format an ISO 8601 timestamp to a short localized time (HH:mm).
+ * Falls back to the raw string if parsing fails.
+ */
+private fun formatTime(isoTimestamp: String): String {
+    return try {
+        val instant = Instant.parse(isoTimestamp)
+        val formatter = DateTimeFormatter.ofPattern("HH:mm")
+            .withZone(ZoneId.systemDefault())
+        formatter.format(instant)
+    } catch (_: Exception) {
+        // Fallback: extract HH:MM from a known ISO substring
+        isoTimestamp.substringAfter("T").take(5)
+    }
+}
 
 private fun connectionStatusLabel(state: ChatConnectionState): String = when (state) {
     ChatConnectionState.Connected -> "Connected"
