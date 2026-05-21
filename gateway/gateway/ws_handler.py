@@ -154,15 +154,24 @@ async def handle_chat_ws(websocket: WebSocket) -> None:
                 TypingEvent(agent_id=msg.agent_id, is_typing=True).model_dump_json()
             )
 
-            # ── Step 3: Generate reply ──
+            # ── Step 3: Generate reply with reconstructed conversation context ──
             if msg.agent_id == "hermes-agent" and _hermes_manager is not None:
+                # Load prior messages from this session for context reconstruction
+                prior_messages = await db.get_history(session_id=msg.session_id, limit=50)
+                # Strip the current user message from history (already persisted in Step 1
+                # but not yet relevant to the reply prompt — we want everything *before* it)
+                # get_history returns all messages, including the one we just persisted.
+                # Filter to only messages before the current one.
+                prior_context = [m for m in prior_messages if m.id != user_msg_id]
                 logger.info(
-                    "Agent branch: hermes-agent — delegating to HermesManager "
-                    "(session=%s, user_message_len=%d)",
-                    msg.session_id, len(msg.text),
+                    "Hermes context reconstruction — session=%s, "
+                    "prior_turns=%d, total_history=%d",
+                    msg.session_id, len(prior_context) // 2, len(prior_messages),
                 )
-                # Route through real Hermes CLI
-                hermes_result = await _hermes_manager.send_task(msg.text, timeout=120.0)
+                # Route through real Hermes CLI with reconstructed context
+                hermes_result = await _hermes_manager.send_task(
+                    msg.text, timeout=120.0, context_messages=prior_context,
+                )
                 if hermes_result.success:
                     reply_text = hermes_result.text
                     logger.info(

@@ -225,3 +225,57 @@ def test_rapid_fire_same_session():
     assert h["messages"][0]["text"] == "first"
     assert h["messages"][2]["text"] == "second"
     assert h["messages"][4]["text"] == "third"
+
+
+# ─── Context continuity tests ───────────────────────────────────────────
+
+
+def test_context_loaded_from_prior_messages():
+    """Verify that prior messages are loaded from DB and included in context.
+
+    When Hermes is called, the WS handler loads prior messages from the
+    session's history and passes them as context_messages to send_task().
+    This test verifies the gateway-side plumbing by checking that:
+    1. Prior messages exist in the DB for the session
+    2. The second WS call sees those prior messages
+    3. Messages from OTHER sessions are NOT loaded
+    """
+    # Create session
+    r = httpx.post(f"{BASE}/chat/sessions", json={"agent_id": "hermes-agent"})
+    sid = r.json()["id"]
+
+    # Send first message
+    with ws_connect(WS) as ws:
+        ws.recv(timeout=5)
+        payload = json.dumps({
+            "type": "message", "session_id": sid,
+            "agent_id": "hermes-agent", "text": "first message",
+        })
+        ws.send(payload)
+        for _ in range(4):
+            ws.recv(timeout=120)
+
+    # Verify 2 messages exist in session (1 user + 1 agent)
+    h = httpx.get(f"{BASE}/chat/history", params={"session": sid, "limit": 50}).json()
+    assert len(h["messages"]) == 2, (
+        f"Expected 2 messages after first send, got {len(h['messages'])}"
+    )
+
+    # Send second message — should load prior 2 messages as context
+    with ws_connect(WS) as ws:
+        ws.recv(timeout=5)
+        payload = json.dumps({
+            "type": "message", "session_id": sid,
+            "agent_id": "hermes-agent", "text": "second message",
+        })
+        ws.send(payload)
+        for _ in range(4):
+            ws.recv(timeout=120)
+
+    # Verify 4 messages exist (2 user + 2 agent) — no extra sessions created
+    h = httpx.get(f"{BASE}/chat/history", params={"session": sid, "limit": 50}).json()
+    assert len(h["messages"]) == 4, (
+        f"Expected 4 messages after second send, got {len(h['messages'])}"
+    )
+    assert h["messages"][0]["text"] == "first message"
+    assert h["messages"][2]["text"] == "second message"

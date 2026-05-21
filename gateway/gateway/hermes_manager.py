@@ -2,10 +2,11 @@
 
 The Hermes CLI is installed on the Debian server and serves as a real
 remote AI agent endpoint. Each user message is dispatched as an independent
-`hermes chat -q` subprocess call.
+`hermes chat -q` subprocess call, but with full conversation context
+reconstructed from the gateway's session/message tables.
 
-This was originally named \"DroidManager\" but Hermes is not \"Factory Droid\"
-— there is no separate \"droid\" CLI. The term \"droid\" in the Hermes ecosystem
+This was originally named "DroidManager" but Hermes is not "Factory Droid"
+— there is no separate "droid" CLI. The term "droid" in the Hermes ecosystem
 refers to the tmux-spawning pattern for autonomous workers
 (see references/droid-agent-spawning.md). The adapter is named honestly.
 """
@@ -14,6 +15,8 @@ import asyncio
 import logging
 import re
 from dataclasses import dataclass, field
+
+from gateway.models import Message, MessageRole
 
 logger = logging.getLogger("gateway.hermes")
 
@@ -50,6 +53,65 @@ class HermesResult:
     error: str = ""
     duration_ms: int = 0
     executable: str = ""
+
+
+_SYSTEM_PROMPT = (
+    "You are Hermes Agent, a capable AI assistant running inside AFK "
+    "(Away From Keyboard) — a mobile interface for remote AI agents. "
+    "This is an ongoing conversation. Respond to each message in the "
+    "context of the full conversation history above. Be concise, "
+    "helpful, and accurate."
+)
+
+_MAX_CONTEXT_TURNS = 20  # max user+assistant pairs to include
+
+
+def build_context_prompt(
+    prior_messages: list[Message],
+    current_text: str,
+) -> str:
+    """Build a structured prompt including conversation history.
+
+    Args:
+        prior_messages: Previous messages in this session, oldest first.
+        current_text: The current user message text.
+
+    Returns:
+        A single string suitable for passing as the message to
+        ``hermes chat -q``.
+    """
+    # Start with system instructions
+    parts = [_SYSTEM_PROMPT, ""]
+
+    # Add conversation history (up to _MAX_CONTEXT_TURNS)
+    # prior_messages is oldest-first, take the most recent ones
+    history = prior_messages[-_MAX_CONTEXT_TURNS * 2:]  # *2 because each turn = 2 msgs
+    if history:
+        parts.append("=== Conversation History ===")
+        parts.append("")
+        for msg in history:
+            if msg.role == MessageRole.user:
+                label = "User"
+            else:
+                label = "Assistant"
+            parts.append(f"{label}: {msg.text}")
+            parts.append("")
+        parts.append("=== Current Message ===")
+        parts.append("")
+
+    parts.append(f"User: {current_text}")
+    parts.append("")
+
+    return "\n".join(parts)
+
+
+@dataclass
+class LoggedContext:
+    """Metadata about context passed to Hermes, for logging."""
+    turns_loaded: int = 0
+    approx_chars: int = 0
+    has_summary: bool = False
+    summary_chars: int = 0
 
 
 class HermesManager:
@@ -231,10 +293,16 @@ class HermesManager:
         self,
         message: str,
         timeout: float = 120.0,
+        context_messages: list[Message] | None = None,
     ) -> HermesResult:
-        """Send a single task/prompt to the Hermes CLI.
+        """Send a task to the Hermes CLI with optional conversation context.
 
-        Runs `hermes chat -q "message"` as a subprocess and returns the
+        When ``context_messages`` is provided, the prompt sent to Hermes
+        includes the full conversation history reconstructed from the
+        gateway's session, so Hermes sees the thread as an ongoing
+        conversation.
+
+        Runs ``hermes chat -q "prompt"`` as a subprocess and returns the
         response text, stripped of status banners and session metadata.
         """
         if not self._hermes_path:
@@ -255,9 +323,29 @@ class HermesManager:
                           "Install Hermes Agent to enable this agent.",
                 )
 
+        # Build reconstructed context if history is provided
+        context_info = LoggedContext()
+        prompt = message
+        if context_messages is not None:
+            prompt = build_context_prompt(context_messages, message)
+            context_info.turns_loaded = len(context_messages) // 2  # approximate turns
+            context_info.approx_chars = len(prompt)
+            logger.info(
+                "Hermes send_task — context=%s, turns=%d, session_chars=%d, "
+                "total_chars=%d, raw_msg_chars=%d",
+                "provided", context_info.turns_loaded,
+                sum(len(m.text) for m in context_messages),
+                context_info.approx_chars, len(message),
+            )
+        else:
+            logger.info(
+                "Hermes send_task — NO CONTEXT (bare message), executable=%s, chars=%d",
+                self._hermes_path, len(message),
+            )
+
         logger.info(
             "Hermes send_task — executable=%s, chars=%d, timeout=%.0fs",
-            self._hermes_path, len(message), timeout,
+            self._hermes_path, len(prompt), timeout,
         )
 
         async with self._lock:
@@ -268,7 +356,7 @@ class HermesManager:
             start = time.monotonic()
 
             proc = await asyncio.create_subprocess_exec(
-                self._hermes_path, "chat", "-q", message, "-Q",
+                self._hermes_path, "chat", "-q", prompt, "-Q",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 env=self._subprocess_env,
