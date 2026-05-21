@@ -3,12 +3,12 @@ package com.owlbutcherlive.afk.feature.connection.presentation
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.owlbutcherlive.afk.core.common.ConnectionSession
 import com.owlbutcherlive.afk.core.network.ApiClient
 import com.owlbutcherlive.afk.core.network.WebSocketClient
 import com.owlbutcherlive.afk.core.security.SecretStorage
 import com.owlbutcherlive.afk.core.ssh.SshConfig
 import com.owlbutcherlive.afk.core.ssh.SshConnectionResult
-import com.owlbutcherlive.afk.core.ssh.TunnelManager
 import com.owlbutcherlive.afk.domain.AuthMode
 import com.owlbutcherlive.afk.domain.ConnectionConfig
 import com.owlbutcherlive.afk.feature.connection.contract.ConnectionEffect
@@ -24,7 +24,7 @@ import kotlinx.coroutines.launch
 
 class ConnectionViewModel(application: Application) : AndroidViewModel(application) {
 
-    private val tunnelManager = TunnelManager()
+    private val tunnelManager = ConnectionSession.tunnelManager
     private val secretStorage = SecretStorage(application)
     private val webSocketClient = WebSocketClient()
 
@@ -91,6 +91,15 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                     ApiClient.configureForPort(port)
                     webSocketClient.connect(port)
 
+                    // Share the session state with other features
+                    ConnectionSession.activate(
+                        host = config.host,
+                        sshPort = config.sshPort,
+                        username = config.username,
+                        tunnelPort = port,
+                        remoteApiPort = config.remoteApiPort
+                    )
+
                     setState {
                         copy(
                             connectionStatus = ConnectionStatus.Connected,
@@ -98,7 +107,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
                             errorMessage = null
                         )
                     }
-                    _effects.send(ConnectionEffect.TunnelReady(port))
+                    _effects.send(ConnectionEffect.NavigateToDashboard(config.host, config.remoteApiPort))
                 }
 
                 is SshConnectionResult.Failed -> {
@@ -132,8 +141,7 @@ class ConnectionViewModel(application: Application) : AndroidViewModel(applicati
         setState { copy(connectionStatus = ConnectionStatus.Disconnecting) }
         viewModelScope.launch {
             webSocketClient.disconnect()
-            tunnelManager.disconnect()
-            ApiClient.reset()
+            ConnectionSession.deactivate()
             setState {
                 copy(
                     connectionStatus = ConnectionStatus.Idle,

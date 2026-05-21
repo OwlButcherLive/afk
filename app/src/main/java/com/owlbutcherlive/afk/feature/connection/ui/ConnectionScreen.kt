@@ -21,6 +21,7 @@ import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.owlbutcherlive.afk.domain.AuthMode
+import com.owlbutcherlive.afk.feature.connection.contract.ConnectionEffect
 import com.owlbutcherlive.afk.feature.connection.contract.ConnectionIntent
 import com.owlbutcherlive.afk.feature.connection.contract.ConnectionStatus
 import com.owlbutcherlive.afk.feature.connection.presentation.ConnectionViewModel
@@ -28,9 +29,19 @@ import com.owlbutcherlive.afk.feature.connection.presentation.ConnectionViewMode
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ConnectionScreen(
+    onConnected: () -> Unit = {},
     viewModel: ConnectionViewModel = viewModel()
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
+
+    LaunchedEffect(Unit) {
+        viewModel.effects.collect { effect ->
+            when (effect) {
+                is ConnectionEffect.NavigateToDashboard -> onConnected()
+                else -> {}
+            }
+        }
+    }
 
     Scaffold(
         topBar = {
