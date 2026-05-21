@@ -67,6 +67,15 @@ class CreateSessionRequest(BaseModel):
     agent_id: str
 
 
+# ─── Droid models ─────────────────────────────────────────────────────────────
+
+class DroidStatusResponse(BaseModel):
+    available: bool
+    version: str = ""
+    busy: bool = False
+    error: str = ""
+
+
 # ─── WebSocket message models ────────────────────────────────────────────────
 
 class IncomingMessageType(str, Enum):

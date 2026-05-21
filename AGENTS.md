@@ -11,6 +11,7 @@ Current V1 scope:
 - REST + WebSocket communication through the SSH tunnel
 - Session-based conversations with resume and agent selection
 - Session list with create/reopen flows
+- Real remote agent integration (Factory Droid via Hermes CLI)
 
 Repository root:
 - Work from the afk/ directory
@@ -193,7 +194,7 @@ Work in this order unless a technical issue requires a small reordering.
 6. Connection screen in Compose
 7. UI feedback and error handling
 8. Basic repository wiring
-9. Hardening, cleanup, and documentation
+|10. Factory Droid integration — real remote agent endpoint
 
 ## Definition of Done for V1
 V1 is done only when all the following are true:

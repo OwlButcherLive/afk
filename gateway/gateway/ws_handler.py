@@ -17,6 +17,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 logger = logging.getLogger("gateway.ws")
 
 from gateway import database as db
+from gateway.droid_manager import DroidManager
 from gateway.models import (
     AgentStatusEvent,
     ErrorEvent,
@@ -27,6 +28,14 @@ from gateway.models import (
     TypingEvent,
     utc_now,
 )
+
+# DroidManager is set during lifespan in main.py
+_droid_manager: DroidManager | None = None
+
+
+def set_droid_manager(dm: DroidManager) -> None:
+    global _droid_manager
+    _droid_manager = dm
 
 
 def _stub_reply(user_text: str) -> str:
@@ -141,8 +150,21 @@ async def handle_chat_ws(websocket: WebSocket) -> None:
                 TypingEvent(agent_id=msg.agent_id, is_typing=True).model_dump_json()
             )
 
-            # ── Step 3: Generate stub reply ──
-            reply_text = _stub_reply(msg.text)
+            # ── Step 3: Generate reply ──
+            if msg.agent_id == "factory-droid" and _droid_manager is not None:
+                # Route through real Factory Droid
+                droid_result = await _droid_manager.send_task(msg.text, timeout=120.0)
+                if droid_result.success:
+                    reply_text = droid_result.text
+                else:
+                    reply_text = f"⚠️ Droid error: {droid_result.error}"
+                logger.info(
+                    f"Droid replied in {droid_result.duration_ms}ms "
+                    f"(success={droid_result.success})"
+                )
+            else:
+                # Standard stub reply for non-droid agents
+                reply_text = _stub_reply(msg.text)
 
             # ── Step 4: Persist agent reply ──
             reply_msg_id = f"msg_{uuid.uuid4().hex[:12]}"

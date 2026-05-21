@@ -80,6 +80,17 @@ def init_db() -> None:
             )
             conn.commit()
 
+        # Seed factory-droid agent if missing
+        droid_row = conn.execute(
+            "SELECT id FROM agents WHERE id = ?", ("factory-droid",)
+        ).fetchone()
+        if droid_row is None:
+            conn.execute(
+                "INSERT INTO agents (id, name, status) VALUES (?, ?, ?)",
+                ("factory-droid", "Factory Droid", "online"),
+            )
+            conn.commit()
+
         # Create a default session for backward compat if missing
         default_sess = conn.execute(
             "SELECT id FROM sessions WHERE id = ?", ("default",)

@@ -3,9 +3,11 @@
 from fastapi import APIRouter, HTTPException, Query
 
 from gateway import database as db
+from gateway.droid_manager import DroidManager
 from gateway.models import (
     AgentsResponse,
     CreateSessionRequest,
+    DroidStatusResponse,
     HealthResponse,
     HistoryResponse,
     SessionResponse,
@@ -13,6 +15,14 @@ from gateway.models import (
 )
 
 router = APIRouter()
+
+# DroidManager is set during lifespan in main.py
+_droid_manager: DroidManager | None = None
+
+
+def set_droid_manager(dm: DroidManager) -> None:
+    global _droid_manager
+    _droid_manager = dm
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -79,4 +89,20 @@ async def get_session(session_id: str):
         agent_id=session.agent_id,
         title=session.title,
         updated_at=session.updated_at,
+    )
+
+
+# ─── Factory Droid status ─────────────────────────────────────────────────────
+
+
+@router.get("/agents/factory-droid/status", response_model=DroidStatusResponse)
+async def droid_status():
+    if _droid_manager is None:
+        return DroidStatusResponse(available=False, error="Droid manager not initialized")
+    status = await _droid_manager.get_status()
+    return DroidStatusResponse(
+        available=status.available,
+        version=status.version,
+        busy=status.busy,
+        error=status.error,
     )
