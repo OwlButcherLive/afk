@@ -37,6 +37,8 @@ class HermesStatus:
     candidates_checked: list[str] = field(default_factory=list)
     usable: bool = False
     usable_reason: str = ""
+    deep_probe_ok: bool = False
+    deep_probe_error: str = ""
 
 
 @dataclass
@@ -65,6 +67,8 @@ class HermesManager:
         self._lock = asyncio.Lock()
         self._initialized: bool = False
         self._candidates_checked: list[str] = []
+        self._deep_probe_ok: bool = False
+        self._deep_probe_error: str = ""
 
     async def initialize(self) -> None:
         """Discover hermes binary and version. Safe to call repeatedly."""
@@ -72,6 +76,8 @@ class HermesManager:
             return
 
         self._candidates_checked = list(_HERMES_CANDIDATES)
+        self._deep_probe_ok = False
+        self._deep_probe_error = ""
 
         for candidate in _HERMES_CANDIDATES:
             try:
@@ -92,6 +98,8 @@ class HermesManager:
                         "Hermes Agent available — executable=%s, version=%s",
                         candidate, version_line,
                     )
+                    # Deep probe: verify the CLI can actually make a conversation
+                    await self._deep_probe()
                     return
                 logger.debug(
                     "Hermes candidate %s returned exit %d",
@@ -112,6 +120,67 @@ class HermesManager:
             len(_HERMES_CANDIDATES),
         )
         self._initialized = True
+
+    async def _deep_probe(self) -> None:
+        """Run a quick conversation to verify Hermes can actually produce responses.
+
+        Uses a minimal prompt with a short timeout. Stores result in
+        _deep_probe_ok and _deep_probe_error.
+        """
+        if not self._hermes_path:
+            self._deep_probe_ok = False
+            self._deep_probe_error = "No executable path to probe"
+            return
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                self._hermes_path, "chat", "-q", "ping", "-Q",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env={"HERMES_YOLO_MODE": "1"},
+            )
+            stdout, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=30.0
+            )
+            if proc.returncode == 0:
+                response = _extract_response(stdout.decode())
+                if response and len(response) >= 2:
+                    self._deep_probe_ok = True
+                    self._deep_probe_error = ""
+                    logger.info(
+                        "Hermes deep probe OK — got response (%d chars)",
+                        len(response),
+                    )
+                else:
+                    self._deep_probe_ok = False
+                    self._deep_probe_error = (
+                        "Deep probe returned empty or too-short response"
+                    )
+                    logger.warning(
+                        "Hermes deep probe: empty/short response: %s",
+                        response[:100],
+                    )
+            else:
+                err = stderr.decode()[:300]
+                self._deep_probe_ok = False
+                self._deep_probe_error = (
+                    f"Deep probe failed (exit {proc.returncode}): {err}"
+                )
+                logger.warning(
+                    "Hermes deep probe failed (exit=%d): %s",
+                    proc.returncode, err,
+                )
+        except asyncio.TimeoutError:
+            self._deep_probe_ok = False
+            self._deep_probe_error = (
+                "Deep probe timed out after 30s — provider/model may be "
+                "misconfigured"
+            )
+            logger.warning("Hermes deep probe timed out")
+        except Exception as exc:
+            self._deep_probe_ok = False
+            self._deep_probe_error = f"Deep probe error: {exc}"
+            logger.warning("Hermes deep probe error: %s", exc)
 
     async def get_status(self) -> HermesStatus:
         """Return current Hermes CLI status."""
@@ -139,6 +208,8 @@ class HermesManager:
             candidates_checked=self._candidates_checked,
             usable=True,
             usable_reason="Hermes CLI discovered and ready",
+            deep_probe_ok=self._deep_probe_ok,
+            deep_probe_error=self._deep_probe_error,
         )
 
     async def send_task(
@@ -271,6 +342,8 @@ class HermesManager:
         self._busy = False
         self._initialized = False
         self._candidates_checked = []
+        self._deep_probe_ok = False
+        self._deep_probe_error = ""
 
 
 def _clean_text(text: str) -> str:

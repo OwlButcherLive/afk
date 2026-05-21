@@ -180,10 +180,14 @@ async def handle_chat_ws(websocket: WebSocket) -> None:
             elif _hermes_manager is None and msg.agent_id == "hermes-agent":
                 logger.warning(
                     "Agent branch: hermes-agent selected but HermesManager is None — "
-                    "falling back to stub (session=%s)",
+                    "returning typed error instead of stub (session=%s)",
                     msg.session_id,
                 )
-                reply_text = _stub_reply(msg.text)
+                reply_text = (
+                    "⚠️ Hermes Agent is not available on the server. "
+                    "The Hermes CLI must be installed and configured. "
+                    "Check /agents/hermes-agent/status for details."
+                )
             else:
                 # Standard stub reply for non-Hermes agents
                 logger.info(

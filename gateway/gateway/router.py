@@ -124,4 +124,6 @@ async def hermes_status():
         candidates_checked=status.candidates_checked,
         usable=status.usable,
         usable_reason=status.usable_reason,
+        deep_probe_ok=status.deep_probe_ok,
+        deep_probe_error=status.deep_probe_error,
     )

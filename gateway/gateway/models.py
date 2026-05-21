@@ -78,6 +78,8 @@ class HermesStatusResponse(BaseModel):
     candidates_checked: list[str] = []
     usable: bool = False
     usable_reason: str = ""
+    deep_probe_ok: bool = False
+    deep_probe_error: str = ""
 
 
 # ─── WebSocket message models ────────────────────────────────────────────────

@@ -52,6 +52,9 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private val _effects = Channel<ChatEffect>(Channel.CONFLATED)
     val effects = _effects.receiveAsFlow()
 
+    // Tracks the session's agentId so loadAgents() can select the right agent
+    private var pendingAgentId: String? = null
+
     init {
         // Restore cached state so the user sees their last session immediately
         val cachedMessages = chatCache.loadMessages()
@@ -94,6 +97,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 chatCache.clear()
                 viewModelScope.launch {
+                    // Fetch session details to get the correct agentId for this session
+                    pendingAgentId = fetchSessionAgentId(intent.sessionId)
                     loadAgents()
                     loadHistory()
                     connectWebSocket()
@@ -137,13 +142,39 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
+    /**
+     * Fetch the agentId for a session from the server.
+     * Returns the agentId string, or null on failure.
+     */
+    private suspend fun fetchSessionAgentId(sessionId: String): String? {
+        if (sessionId.isEmpty() || sessionId == "default") return null
+        return try {
+            val response = chatApi.getSession(sessionId)
+            if (response.isSuccessful) {
+                response.body()?.agentId
+            } else {
+                Log.w(TAG, "Failed to fetch session agentId: ${response.code()}")
+                null
+            }
+        } catch (e: Exception) {
+            Log.w(TAG, "Error fetching session agentId: ${e.message}")
+            null
+        }
+    }
+
     private suspend fun loadAgents() {
         try {
             val response = chatApi.getAgents()
             if (response.isSuccessful) {
                 val agents = response.body()?.agents ?: emptyList()
                 if (agents.isNotEmpty()) {
-                    val agent = agents.first()
+                    // Select the agent matching the session's agentId, or fall back to first
+                    val agent = if (pendingAgentId != null) {
+                        agents.find { it.id == pendingAgentId }
+                            ?: agents.first()
+                    } else {
+                        agents.first()
+                    }
                     setState {
                         copy(
                             currentAgent = ChatAgent(
