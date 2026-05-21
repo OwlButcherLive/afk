@@ -92,7 +92,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         sessionTitle = intent.sessionTitle,
                         messages = emptyList(),
                         historyError = null,
-                        isLoadingHistory = true
+                        isLoadingHistory = true,
+                        connectionState = ChatConnectionState.Connecting,
+                        currentAgent = null,
+                        isAgentTyping = false
                     )
                 }
                 chatCache.clear()

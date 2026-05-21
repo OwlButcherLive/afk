@@ -69,6 +69,9 @@ class HermesManager:
         self._candidates_checked: list[str] = []
         self._deep_probe_ok: bool = False
         self._deep_probe_error: str = ""
+        # Build augmented env — preserves PATH, HOME, etc. while adding HERMES_YOLO_MODE
+        import os
+        self._subprocess_env = dict(os.environ) | {"HERMES_YOLO_MODE": "1"}
 
     async def initialize(self) -> None:
         """Discover hermes binary and version. Safe to call repeatedly."""
@@ -91,7 +94,19 @@ class HermesManager:
                 )
                 if proc.returncode == 0:
                     version_line = stdout.decode().strip().split("\n")[0]
-                    self._hermes_path = candidate
+                    # Resolve bare name to absolute path so it works with env override
+                    # (env= strips PATH, making bare names unfindable by subprocess)
+                    resolved = candidate
+                    if "/" not in candidate:
+                        import shutil
+                        resolved_full = shutil.which(candidate)
+                        if resolved_full:
+                            resolved = resolved_full
+                            logger.info(
+                                "Resolved bare '%s' to absolute path: %s",
+                                candidate, resolved,
+                            )
+                    self._hermes_path = resolved
                     self._version = version_line
                     self._initialized = True
                     logger.info(
@@ -137,7 +152,7 @@ class HermesManager:
                 self._hermes_path, "chat", "-q", "ping", "-Q",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env={"HERMES_YOLO_MODE": "1"},
+                env=self._subprocess_env,
             )
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(), timeout=30.0
@@ -256,7 +271,7 @@ class HermesManager:
                 self._hermes_path, "chat", "-q", message, "-Q",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env={"HERMES_YOLO_MODE": "1"},
+                env=self._subprocess_env,
             )
 
             try:
@@ -398,10 +413,11 @@ def _extract_response(raw: str) -> str:
 
     result = text.strip()
 
-    if not result or len(result) < 5:
+    if not result:
         logger.warning(
-            f"_extract_response: stripped to {len(result)} chars, "
+            f"_extract_response: stripped to empty, "
             f"falling back to raw"
         )
         return raw.strip()
+
     return result
