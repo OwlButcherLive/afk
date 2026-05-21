@@ -7,6 +7,8 @@ import com.owlbutcherlive.afk.domain.ChatMessage
  * Represents the complete UI state for the chat screen.
  */
 data class ChatUiState(
+    val sessionId: String = "",
+    val sessionTitle: String = "Chat",
     val messages: List<ChatMessage> = emptyList(),
     val inputText: String = "",
     val isLoadingHistory: Boolean = true,

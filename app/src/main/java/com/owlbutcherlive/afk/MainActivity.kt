@@ -10,6 +10,7 @@ import com.owlbutcherlive.afk.feature.connection.contract.ConnectionEffect
 import com.owlbutcherlive.afk.feature.connection.ui.ConnectionScreen
 import com.owlbutcherlive.afk.feature.dashboard.ui.DashboardScreen
 import com.owlbutcherlive.afk.feature.chat.ui.ChatScreen
+import com.owlbutcherlive.afk.feature.sessions.ui.SessionsScreen
 
 /**
  * Navigation state for the main screens.
@@ -17,7 +18,8 @@ import com.owlbutcherlive.afk.feature.chat.ui.ChatScreen
 private sealed interface Screen {
     data object Connection : Screen
     data object Dashboard : Screen
-    data object Chat : Screen
+    data object Sessions : Screen
+    data class Chat(val sessionId: String, val sessionTitle: String) : Screen
 }
 
 class MainActivity : ComponentActivity() {
@@ -41,15 +43,29 @@ class MainActivity : ComponentActivity() {
                             onDisconnected = {
                                 screen = Screen.Connection
                             },
-                            onOpenChat = {
-                                screen = Screen.Chat
+                            onSessionsList = {
+                                screen = Screen.Sessions
+                            }
+                        )
+                    }
+                    is Screen.Sessions -> {
+                        SessionsScreen(
+                            onSessionSelected = { sessionId, title ->
+                                screen = Screen.Chat(sessionId, title)
+                            },
+                            onBack = {
+                                screen = Screen.Dashboard
                             }
                         )
                     }
                     is Screen.Chat -> {
+                        @Suppress("UNCHECKED_CAST")
+                        val chat = screen as Screen.Chat
                         ChatScreen(
+                            sessionId = chat.sessionId,
+                            sessionTitle = chat.sessionTitle,
                             onBack = {
-                                screen = Screen.Dashboard
+                                screen = Screen.Sessions
                             }
                         )
                     }

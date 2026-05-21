@@ -80,10 +80,11 @@ object ChatProtocol {
      * Serialize an outgoing chat message into the JSON format expected
      * by the Agent Gateway.
      */
-    fun createMessage(agentId: String, text: String): String {
+    fun createMessage(sessionId: String, agentId: String, text: String): String {
         return gson.toJson(
             OutgoingMessagePayload(
                 type = "message",
+                sessionId = sessionId,
                 agentId = agentId,
                 text = text
             )
@@ -118,6 +119,7 @@ private data class AgentStatusPayload(
 
 private data class OutgoingMessagePayload(
     val type: String,
+    @SerializedName("session_id") val sessionId: String,
     @SerializedName("agent_id") val agentId: String,
     val text: String
 )

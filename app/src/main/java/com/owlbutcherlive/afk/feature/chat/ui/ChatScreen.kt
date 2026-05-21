@@ -28,6 +28,8 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChatScreen(
+    sessionId: String = "default",
+    sessionTitle: String = "Chat",
     viewModel: ChatViewModel = viewModel(),
     onBack: () -> Unit = {}
 ) {
@@ -44,6 +46,13 @@ fun ChatScreen(
     // Fire ScreenResumed when the composable enters composition
     LaunchedEffect(Unit) {
         viewModel.processIntent(ChatIntent.ScreenResumed)
+    }
+
+    // Load the requested session when sessionId changes
+    LaunchedEffect(sessionId) {
+        if (sessionId.isNotEmpty()) {
+            viewModel.processIntent(ChatIntent.LoadSession(sessionId, sessionTitle))
+        }
     }
 
     // Collect effects (navigation)
@@ -70,7 +79,7 @@ fun ChatScreen(
                 title = {
                     Column {
                         Text(
-                            text = state.currentAgent?.name ?: "Chat",
+                            text = state.sessionTitle.ifEmpty { state.currentAgent?.name ?: "Chat" },
                             style = MaterialTheme.typography.titleMedium
                         )
                         Text(

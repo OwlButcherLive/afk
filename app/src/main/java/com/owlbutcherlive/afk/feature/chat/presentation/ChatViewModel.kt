@@ -61,10 +61,11 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 copy(
                     messages = cachedMessages,
                     inputText = cachedDraft,
-                    isLoadingHistory = false // don't show loader if we have cached data
+                    isLoadingHistory = false
                 )
             }
         }
+        // Load default session data; LoadSession intent overrides this
         loadInitialData()
     }
 
@@ -81,6 +82,23 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             }
             ChatIntent.ScreenResumed -> onScreenResumed()
             ChatIntent.DismissError -> setState { copy(sendError = null) }
+            is ChatIntent.LoadSession -> {
+                setState {
+                    copy(
+                        sessionId = intent.sessionId,
+                        sessionTitle = intent.sessionTitle,
+                        messages = emptyList(),
+                        historyError = null,
+                        isLoadingHistory = true
+                    )
+                }
+                chatCache.clear()
+                viewModelScope.launch {
+                    loadAgents()
+                    loadHistory()
+                    connectWebSocket()
+                }
+            }
             ChatIntent.NavigateBack -> {
                 viewModelScope.launch {
                     _effects.send(ChatEffect.NavigateBack)
@@ -144,8 +162,10 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
     private suspend fun loadHistory() {
         setState { copy(isLoadingHistory = true, historyError = null) }
+        val sessionId = _state.value.sessionId
+        if (sessionId.isEmpty()) return
         try {
-            val response = chatApi.getHistory(agent = "default", limit = 50)
+            val response = chatApi.getHistory(session = sessionId, limit = 50)
             if (response.isSuccessful) {
                 val messages = response.body()?.messages?.map { dto ->
                     ChatMessage(
@@ -330,7 +350,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         // Clear input immediately
         setState { copy(inputText = "", sendError = null) }
 
-        val payload = ChatProtocol.createMessage(agentId, text)
+        val sessionId = _state.value.sessionId
+        val payload = ChatProtocol.createMessage(sessionId, agentId, text)
         val sent = webSocketClient.send(payload)
         if (!sent) {
             setSendError("Failed to send message — connection lost.")
