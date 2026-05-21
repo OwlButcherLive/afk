@@ -1,18 +1,21 @@
-"""DroidManager — spawn and communicate with a Factory Droid (Hermes Agent).
+"""HermesManager — dispatch tasks to the Hermes CLI via subprocess.
 
-The DroidManager wraps a persistent Hermes Agent instance that runs autonomously
-on the Debian host. For V1, each user message is dispatched as an independent
-`hermes chat -q` subprocess call — simple, clean, and proves the architecture.
+The Hermes CLI is installed on the Debian server and serves as a real
+remote AI agent endpoint. Each user message is dispatched as an independent
+`hermes chat -q` subprocess call.
 
-V2 can add tmux-based persistent sessions for conversational continuity.
+This was originally named \"DroidManager\" but Hermes is not \"Factory Droid\"
+— there is no separate \"droid\" CLI. The term \"droid\" in the Hermes ecosystem
+refers to the tmux-spawning pattern for autonomous workers
+(see references/droid-agent-spawning.md). The adapter is named honestly.
 """
 
 import asyncio
 import logging
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
-logger = logging.getLogger("gateway.droid")
+logger = logging.getLogger("gateway.hermes")
 
 # Try to find hermes in various locations
 _HERMES_CANDIDATES = [
@@ -23,8 +26,8 @@ _HERMES_CANDIDATES = [
 
 
 @dataclass
-class DroidStatus:
-    """Current status of the Factory Droid."""
+class HermesStatus:
+    """Current status of the Hermes Agent CLI."""
 
     available: bool
     version: str = ""
@@ -33,8 +36,8 @@ class DroidStatus:
 
 
 @dataclass
-class DroidResult:
-    """Result from a droid task execution."""
+class HermesResult:
+    """Result from a Hermes task execution."""
 
     success: bool
     text: str = ""
@@ -42,10 +45,12 @@ class DroidResult:
     duration_ms: int = 0
 
 
-class DroidManager:
-    """Manages a Factory Droid (Hermes Agent) instance.
+class HermesManager:
+    """Dispatches tasks to Hermes CLI.
 
     For V1, tasks are dispatched as `hermes chat -q` subprocess calls.
+    Each call is stateless — conversation context lives in the gateway's
+    session/message tables, not in the Hermes process.
     """
 
     def __init__(self) -> None:
@@ -76,28 +81,28 @@ class DroidManager:
                     self._version = version_line
                     self._initialized = True
                     logger.info(
-                        "Factory Droid available: %s (%s)",
+                        "Hermes Agent available: %s (%s)",
                         candidate, version_line,
                     )
                     return
             except (FileNotFoundError, asyncio.TimeoutError, OSError):
                 continue
 
-        logger.warning("Factory Droid: hermes not found on this system")
+        logger.warning("Hermes CLI not found on this system")
         self._initialized = True
 
-    async def get_status(self) -> DroidStatus:
-        """Return current droid status."""
+    async def get_status(self) -> HermesStatus:
+        """Return current Hermes CLI status."""
         if not self._initialized:
             await self.initialize()
 
         if not self._hermes_path:
-            return DroidStatus(
+            return HermesStatus(
                 available=False,
                 error="Hermes CLI not found on this system",
             )
 
-        return DroidStatus(
+        return HermesStatus(
             available=True,
             version=self._version,
             busy=self._busy,
@@ -107,8 +112,8 @@ class DroidManager:
         self,
         message: str,
         timeout: float = 120.0,
-    ) -> DroidResult:
-        """Send a single task/prompt to the Hermes droid.
+    ) -> HermesResult:
+        """Send a single task/prompt to the Hermes CLI.
 
         Runs `hermes chat -q "message"` as a subprocess and returns the
         response text, stripped of status banners and session metadata.
@@ -116,10 +121,9 @@ class DroidManager:
         if not self._hermes_path:
             init_ok = await self._try_discover()
             if not init_ok:
-                return DroidResult(
+                return HermesResult(
                     success=False,
-                    error="Factory Droid is not available. "
-                          "Hermes CLI must be installed on the server.",
+                    error="Hermes CLI is not available on the server.",
                 )
 
         async with self._lock:
@@ -130,7 +134,7 @@ class DroidManager:
             start = time.monotonic()
 
             logger.info(
-                "Droid task: submitting %d chars to Hermes",
+                "Hermes task: submitting %d chars",
                 len(message),
             )
 
@@ -138,7 +142,7 @@ class DroidManager:
                 self._hermes_path, "chat", "-q", message, "-Q",
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                env={"HERMES_YOLO_MODE": "1"},  # skip approvals
+                env={"HERMES_YOLO_MODE": "1"},
             )
 
             try:
@@ -148,10 +152,10 @@ class DroidManager:
             except asyncio.TimeoutError:
                 proc.kill()
                 elapsed = int((time.monotonic() - start) * 1000)
-                logger.error("Droid task timed out after %dms", elapsed)
-                return DroidResult(
+                logger.error("Hermes task timed out after %dms", elapsed)
+                return HermesResult(
                     success=False,
-                    error="Droid task timed out. The agent is still thinking.",
+                    error="Hermes task timed out. The agent is still thinking.",
                     duration_ms=elapsed,
                 )
 
@@ -161,32 +165,32 @@ class DroidManager:
 
             if proc.returncode != 0:
                 logger.error(
-                    "Droid task failed (exit=%d): %s",
+                    "Hermes task failed (exit=%d): %s",
                     proc.returncode, err_text[:500],
                 )
-                return DroidResult(
+                return HermesResult(
                     success=False,
-                    error=f"Droid process failed (exit {proc.returncode}): "
-                          f"{_clean_output(err_text)[:300]}",
+                    error=f"Hermes process failed (exit {proc.returncode}): "
+                          f"{_clean_text(err_text)[:300]}",
                     duration_ms=elapsed,
                 )
 
-            # Strip banner lines and extract the actual response
             response = _extract_response(out_text)
             logger.info(
-                "Droid task completed in %dms, %d chars of response",
-                elapsed, len(response),
+                "Hermes task completed in %dms, %d chars of response, "
+                "raw was %d chars",
+                elapsed, len(response), len(out_text),
             )
 
-            return DroidResult(
+            return HermesResult(
                 success=True,
                 text=response,
                 duration_ms=elapsed,
             )
 
         except Exception as exc:
-            logger.error("Droid task error: %s", exc)
-            return DroidResult(
+            logger.error("Hermes task error: %s", exc)
+            return HermesResult(
                 success=False,
                 error=f"Internal error: {exc}",
             )
@@ -206,59 +210,60 @@ class DroidManager:
         self._version = ""
         self._busy = False
         self._initialized = False
-        logger.info("Factory Droid resources released.")
+        logger.info("Hermes Manager resources released.")
 
 
-def _clean_output(text: str) -> str:
+def _clean_text(text: str) -> str:
     """Remove control characters and normalize whitespace."""
-    # Remove ANSI escape sequences
     text = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", text)
-    # Replace multiple whitespace
     text = re.sub(r"\s+", " ", text)
     return text.strip()
 
 
-def _strip_banners(text: str) -> str:
-    """Remove hermes startup banners, warnings, and session metadata."""
-    lines = text.split("\n")
-    clean = []
-    for line in lines:
-        stripped = line.strip()
-        # Skip warning banners
-        if stripped.startswith("⚠"):
-            continue
-        if stripped.startswith("session_id:"):
-            continue
-        if stripped.startswith("Hermes Agent"):
-            continue
-        if not stripped:
-            continue
-        # Skip the "No text response" note from hermes -q mode
-        if "no text response" in stripped.lower():
-            continue
-        clean.append(line)
-    return "\n".join(clean).strip()
-
-
 def _extract_response(raw: str) -> str:
-    """Extract the droid's response text from raw hermes output."""
+    """Extract the response text from raw hermes output.
+
+    Strips:
+    - ANSI escape sequences
+    - Warning banners (⚠ Normalized model... across multiple lines)
+    - session_id lines
+    - Hermes Agent version prefix lines
+    - Blank lines
+    """
+    text = raw
+
     # Remove ANSI escape sequences
-    text = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", raw)
-    # Remove multi-line warning banners (⚠️  Normalized model...)
+    text = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", text)
+
+    # Remove multi-line warning banners (⚠ Normalized model...)
+    # Uses literal ⚠ (U+26A0) which matches both ⚠ and ⚠️ (with FE0F variation selector)
+    text_before = text
     text = re.sub(
         r"⚠[^\n]*(\n[ \t]*[^\n]*)?",
         "",
         text,
         flags=re.MULTILINE,
     )
+    if text != text_before:
+        logger.info("_extract_response: stripped warning banner (%d chars removed)",
+                     len(text_before) - len(text))
+
     # Remove session_id line
     text = re.sub(r"^session_id:\s*\S+\s*$", "", text, flags=re.MULTILINE)
-    # Remove Hermes Agent version line
-    text = re.sub(r"^Hermes Agent.*$", "", text, flags=re.MULTILINE)
+
+    # Remove Hermes Agent version line (e.g. "Hermes Agent v0.13.0 ...")
+    # NOT the response text which may also start with "Hermes"
+    text = re.sub(r"^Hermes Agent\s+v?\d+\.", "", text, flags=re.MULTILINE)
+
+    # Remove lines that are just "deepseek." or continuation of warnings
+    text = re.sub(r"^[a-z]+\.\s*$", "", text, flags=re.MULTILINE)
+
     # Collapse multiple blank lines
     text = re.sub(r"\n{3,}", "\n\n", text)
+
     result = text.strip()
-    # If after stripping we get nothing meaningful, return raw trimmed
+
     if not result or len(result) < 5:
+        logger.warning("_extract_response: stripped to near-empty, returning raw")
         return raw.strip()
     return result

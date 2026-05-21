@@ -67,9 +67,9 @@ class CreateSessionRequest(BaseModel):
     agent_id: str
 
 
-# ─── Droid models ─────────────────────────────────────────────────────────────
+# ─── Hermes models ────────────────────────────────────────────────────────────
 
-class DroidStatusResponse(BaseModel):
+class HermesStatusResponse(BaseModel):
     available: bool
     version: str = ""
     busy: bool = False

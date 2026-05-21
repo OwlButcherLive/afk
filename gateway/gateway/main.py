@@ -17,9 +17,9 @@ from fastapi import FastAPI, WebSocket
 from fastapi.middleware.cors import CORSMiddleware
 
 from gateway import database as db
-from gateway.droid_manager import DroidManager
-from gateway.router import router, set_droid_manager as router_set_droid
-from gateway.ws_handler import handle_chat_ws, set_droid_manager as ws_set_droid
+from gateway.hermes_manager import HermesManager
+from gateway.router import router, set_hermes_manager as router_set_hermes
+from gateway.ws_handler import handle_chat_ws, set_hermes_manager as ws_set_hermes
 
 logging.basicConfig(
     level=logging.INFO,
@@ -35,17 +35,17 @@ async def lifespan(app: FastAPI):
     db.init_db()
     logger.info("Database ready.")
 
-    # Initialize Factory Droid manager
-    droid = DroidManager()
-    await droid.initialize()
-    router_set_droid(droid)
-    ws_set_droid(droid)
-    logger.info("Factory Droid manager initialized.")
+    # Initialize Hermes Agent manager
+    hermes = HermesManager()
+    await hermes.initialize()
+    router_set_hermes(hermes)
+    ws_set_hermes(hermes)
+    logger.info("Hermes Agent manager initialized.")
 
     yield
 
     # Shutdown
-    await droid.cleanup()
+    await hermes.cleanup()
     logger.info("Gateway shutting down.")
 
 

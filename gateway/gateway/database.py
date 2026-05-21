@@ -80,14 +80,14 @@ def init_db() -> None:
             )
             conn.commit()
 
-        # Seed factory-droid agent if missing
-        droid_row = conn.execute(
-            "SELECT id FROM agents WHERE id = ?", ("factory-droid",)
+        # Seed hermes-agent agent if missing
+        hermes_row = conn.execute(
+            "SELECT id FROM agents WHERE id = ?", ("hermes-agent",)
         ).fetchone()
-        if droid_row is None:
+        if hermes_row is None:
             conn.execute(
                 "INSERT INTO agents (id, name, status) VALUES (?, ?, ?)",
-                ("factory-droid", "Factory Droid", "online"),
+                ("hermes-agent", "Hermes Agent CLI", "online"),
             )
             conn.commit()
 

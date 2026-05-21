@@ -4,7 +4,7 @@ Handles /ws/chat connections:
 - Receives user messages over WebSocket
 - Persists them with session association
 - Emits typing events
-- Generates stub agent replies
+- Generates stub agent replies (default) or routes through Hermes CLI
 - Persists replies and sends them back
 """
 
@@ -17,7 +17,7 @@ from fastapi import WebSocket, WebSocketDisconnect
 logger = logging.getLogger("gateway.ws")
 
 from gateway import database as db
-from gateway.droid_manager import DroidManager
+from gateway.hermes_manager import HermesManager
 from gateway.models import (
     AgentStatusEvent,
     ErrorEvent,
@@ -29,13 +29,13 @@ from gateway.models import (
     utc_now,
 )
 
-# DroidManager is set during lifespan in main.py
-_droid_manager: DroidManager | None = None
+# HermesManager is set during lifespan in main.py
+_hermes_manager: HermesManager | None = None
 
 
-def set_droid_manager(dm: DroidManager) -> None:
-    global _droid_manager
-    _droid_manager = dm
+def set_hermes_manager(hm: HermesManager) -> None:
+    global _hermes_manager
+    _hermes_manager = hm
 
 
 def _stub_reply(user_text: str) -> str:
@@ -151,19 +151,19 @@ async def handle_chat_ws(websocket: WebSocket) -> None:
             )
 
             # ── Step 3: Generate reply ──
-            if msg.agent_id == "factory-droid" and _droid_manager is not None:
-                # Route through real Factory Droid
-                droid_result = await _droid_manager.send_task(msg.text, timeout=120.0)
-                if droid_result.success:
-                    reply_text = droid_result.text
+            if msg.agent_id == "hermes-agent" and _hermes_manager is not None:
+                # Route through real Hermes CLI
+                hermes_result = await _hermes_manager.send_task(msg.text, timeout=120.0)
+                if hermes_result.success:
+                    reply_text = hermes_result.text
                 else:
-                    reply_text = f"⚠️ Droid error: {droid_result.error}"
+                    reply_text = f"⚠️ Hermes error: {hermes_result.error}"
                 logger.info(
-                    f"Droid replied in {droid_result.duration_ms}ms "
-                    f"(success={droid_result.success})"
+                    f"Hermes replied in {hermes_result.duration_ms}ms "
+                    f"(success={hermes_result.success})"
                 )
             else:
-                # Standard stub reply for non-droid agents
+                # Standard stub reply for non-Hermes agents
                 reply_text = _stub_reply(msg.text)
 
             # ── Step 4: Persist agent reply ──

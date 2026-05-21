@@ -3,12 +3,12 @@
 from fastapi import APIRouter, HTTPException, Query
 
 from gateway import database as db
-from gateway.droid_manager import DroidManager
+from gateway.hermes_manager import HermesManager
 from gateway.models import (
     AgentsResponse,
     CreateSessionRequest,
-    DroidStatusResponse,
     HealthResponse,
+    HermesStatusResponse,
     HistoryResponse,
     SessionResponse,
     SessionsListResponse,
@@ -16,13 +16,13 @@ from gateway.models import (
 
 router = APIRouter()
 
-# DroidManager is set during lifespan in main.py
-_droid_manager: DroidManager | None = None
+# HermesManager is set during lifespan in main.py
+_hermes_manager: HermesManager | None = None
 
 
-def set_droid_manager(dm: DroidManager) -> None:
-    global _droid_manager
-    _droid_manager = dm
+def set_hermes_manager(hm: HermesManager) -> None:
+    global _hermes_manager
+    _hermes_manager = hm
 
 
 @router.get("/health", response_model=HealthResponse)
@@ -92,15 +92,15 @@ async def get_session(session_id: str):
     )
 
 
-# ─── Factory Droid status ─────────────────────────────────────────────────────
+# ─── Hermes Agent status ────────────────────────────────────────────────────
 
 
-@router.get("/agents/factory-droid/status", response_model=DroidStatusResponse)
-async def droid_status():
-    if _droid_manager is None:
-        return DroidStatusResponse(available=False, error="Droid manager not initialized")
-    status = await _droid_manager.get_status()
-    return DroidStatusResponse(
+@router.get("/agents/hermes-agent/status", response_model=HermesStatusResponse)
+async def hermes_status():
+    if _hermes_manager is None:
+        return HermesStatusResponse(available=False, error="Hermes manager not initialized")
+    status = await _hermes_manager.get_status()
+    return HermesStatusResponse(
         available=status.available,
         version=status.version,
         busy=status.busy,
