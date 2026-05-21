@@ -24,6 +24,7 @@ from gateway.v2.health import HealthMonitor
 from gateway.v2.runtime import HermesRuntime
 from gateway.v2.worker import WorkerPool
 from gateway.ws_handler import handle_chat_ws, set_hermes_manager as ws_set_hermes
+from gateway.v2.ws_handler import handle_v2_thread_ws
 
 # ─── V2 runtime globals (exported for use by router/ws_handler) ──────────────
 
@@ -108,3 +109,9 @@ app.include_router(router)
 @app.websocket("/ws/chat")
 async def websocket_chat(websocket: WebSocket):
     await handle_chat_ws(websocket)
+
+
+# V2 WebSocket endpoint — thread event streaming
+@app.websocket("/ws/v2/thread")
+async def websocket_v2_thread(websocket: WebSocket):
+    await handle_v2_thread_ws(websocket)

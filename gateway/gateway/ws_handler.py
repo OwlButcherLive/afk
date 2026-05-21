@@ -38,7 +38,6 @@ from gateway.models import (
     TypingEvent,
     utc_now,
 )
-from gateway.main import get_worker_pool
 
 # HermesManager is set during lifespan in main.py
 _hermes_manager: HermesManager | None = None
@@ -103,6 +102,7 @@ async def _process_v2_compat(
         )
 
         # Step 2: Dispatch through WorkerPool
+        from gateway.main import get_worker_pool
         pool = get_worker_pool()
         dispatch_result = await v2_compat.dispatch_v1_turn(
             v2_thread_id=v2_thread_id,

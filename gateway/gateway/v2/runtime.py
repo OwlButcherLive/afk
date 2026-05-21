@@ -318,18 +318,118 @@ class HermesRuntime(AgentRuntime):
     ) -> RuntimeEvent:
         """Process a turn with item callback for streaming.
 
-        Currently wraps the non-streaming process_turn and calls the
-        callback with completed items. Future work will make this truly
-        streaming by emitting items mid-execution.
+        Emits items incrementally as they are produced:
+        1. user_message item → callback (before Hermes call)
+        2. agent_message item → callback (after Hermes response)
+        3. turn_completed/turn_fired event
+
+        Note: Hermes CLI currently returns the full response at once,
+        so true mid-stream token emission isn't possible with the
+        current subprocess-based dispatch. This implementation
+        provides the correct architectural hooks for future streaming.
+        When the backend supports incremental output (piped subprocess,
+        SSE, websocket), items will be emitted as they arrive.
         """
-        event = await self.process_turn(turn, prior_items)
-        if item_callback and event.items:
-            for item in event.items:
+        self._busy = True
+        self._current_turn_id = turn.id
+
+        # Find the user message text
+        if turn.user_message_id:
+            user_msg = next(
+                (item for item in prior_items if item.id == turn.user_message_id),
+                None,
+            )
+            text = user_msg.content if user_msg else turn.user_message_id
+        else:
+            text = turn.user_message_id or ""
+
+        # Build context from prior items
+        context_messages = [
+            m for m in prior_items
+            if m.kind in ("user_message", "agent_message")
+            and not m.metadata.get("generated")
+        ]
+
+        # Emit user_message item before processing (if callback provided)
+        if item_callback:
+            from gateway.v2.models import ThreadItem as V2Item, ThreadItemKind, utc_now
+            emit_item = V2Item(
+                id=f"rt_user_{turn.id[:8]}",
+                thread_id=turn.thread_id,
+                turn_id=turn.id,
+                kind=ThreadItemKind.user_message,
+                index=0,
+                role="user",
+                content=text,
+                metadata={"runtime": "hermes", "generated": True, "streaming": True},
+                created_at=utc_now(),
+            )
+            try:
+                await item_callback(emit_item, "item_produced")
+            except Exception as e:
+                logger.warning("Streaming callback failed on user_message: %s", e)
+
+        # Dispatch to Hermes via existing manager
+        from gateway.models import Message, MessageRole
+
+        hermes_context = []
+        for item in context_messages:
+            role = MessageRole.user if item.role == "user" else MessageRole.agent
+            hermes_context.append(Message(
+                id=item.id,
+                agent_id="hermes-agent",
+                role=role,
+                text=item.content,
+                timestamp=item.created_at,
+            ))
+
+        result = await self._manager.send_task(
+            message=text,
+            timeout=120.0,
+            context_messages=hermes_context if hermes_context else None,
+        )
+
+        self._busy = False
+        self._current_turn_id = ""
+
+        meta = {
+            "runtime": "hermes",
+            "executable": result.executable if result.success else "",
+            "duration_ms": result.duration_ms,
+        }
+
+        if result.success:
+            items = await self._build_thread_items(
+                turn=turn, prior_items=prior_items,
+                user_text=text, reply_text=result.text, metadata=meta,
+            )
+            # Emit agent_message item via callback
+            if item_callback and len(items) > 1:
+                agent_item = items[1] if len(items) > 1 else items[0]
                 try:
-                    await item_callback(item, event.kind)
+                    await item_callback(agent_item, "item_produced")
                 except Exception as e:
-                    logger.warning("Streaming callback failed: %s", e)
-        return event
+                    logger.warning("Streaming callback failed on agent_message: %s", e)
+            return RuntimeEvent(
+                kind="turn_completed", turn_id=turn.id,
+                items=items, metadata=meta,
+            )
+        else:
+            items = await self._build_thread_items(
+                turn=turn, prior_items=prior_items,
+                user_text=text, reply_text=result.error,
+                is_error=True, metadata=meta,
+            )
+            if item_callback and len(items) > 1:
+                err_item = items[1] if len(items) > 1 else items[0]
+                try:
+                    await item_callback(err_item, "item_produced")
+                except Exception as e:
+                    logger.warning("Streaming callback failed on error: %s", e)
+            return RuntimeEvent(
+                kind="turn_failed", turn_id=turn.id,
+                items=items, error=result.error, metadata=meta,
+            )
 
     async def interrupt(self, turn_id: str) -> bool:
         logger.warning("HermesRuntime.interrupt not yet implemented")

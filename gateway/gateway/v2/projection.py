@@ -214,3 +214,49 @@ async def build_snapshot(thread_id: str) -> ThreadSnapshot | None:
         created_at=projection.created_at,
         updated_at=projection.updated_at,
     )
+
+
+async def build_v1_history_payload(thread_id: str) -> list[dict]:
+    """Build a V1-shaped history payload from V2 thread data.
+
+    Returns list of dicts matching the V1 Message model shape.
+    """
+    projection = await build_thread_projection(thread_id, include_items=True)
+    if projection is None:
+        return []
+
+    runtime_kind = projection.runtime_kind
+    messages = []
+    for item in projection.items:
+        role = "user" if item.get("role") == "user" else "agent"
+        messages.append({
+            "id": item["id"],
+            "agent_id": runtime_kind,
+            "role": role,
+            "text": item["content"],
+            "timestamp": item.get("created_at", ""),
+        })
+    return messages
+
+
+async def build_v1_session_list_payload(
+    server_session_id: str,
+    limit: int = 50,
+) -> list[dict]:
+    """Build a V1-shaped session list payload from V2 thread projections.
+
+    Returns list of dicts matching the V1 Session model shape.
+    """
+    items = await build_thread_list(server_session_id, limit=limit)
+    sessions = []
+    for item in items:
+        sessions.append({
+            "id": item.id,
+            "agent_id": item.runtime_kind,
+            "title": item.title,
+            "last_message_preview": item.last_message_preview,
+            "updated_at": item.updated_at,
+            "message_count": item.turn_count * 2,
+            "is_active": item.is_active,
+        })
+    return sessions

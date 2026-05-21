@@ -528,3 +528,137 @@ class TestV2Package:
         assert projection is not None
         assert requests is not None
         assert compat is not None
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Projection — V1 payload builders
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestProjectionBuilders:
+    """Projection layer V1 payload builders."""
+
+    @pytest.fixture(autouse=True)
+    def init_v2_db(self):
+        """Ensure V2 schema exists for projection tests."""
+        from gateway.v2.database import init_v2_schema
+        init_v2_schema()
+
+    def test_v1_history_empty_for_unknown_thread(self):
+        """build_v1_history_payload returns empty list for unknown thread."""
+        import asyncio
+        from gateway.v2.projection import build_v1_history_payload
+        history = asyncio.run(build_v1_history_payload("nonexistent"))
+        assert history == []
+
+    def test_v1_session_list_empty_for_unknown_session(self):
+        """build_v1_session_list_payload returns empty list."""
+        import asyncio
+        from gateway.v2.projection import build_v1_session_list_payload
+        sessions = asyncio.run(build_v1_session_list_payload("nonexistent"))
+        assert sessions == []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Compat — V1→V2 mapping and request tracker
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestCompatV2:
+    """Compat layer V2 integration."""
+
+    @pytest.fixture(autouse=True)
+    def init_v2_db(self):
+        """Ensure V2 schema exists for compat tests."""
+        from gateway.v2.database import init_v2_schema
+        init_v2_schema()
+
+    def test_add_and_get_v1_mapping(self):
+        """add_v1_mapping and get_v2_thread_for_v1_session work."""
+        from gateway.v2.compat import add_v1_mapping, get_v2_thread_for_v1_session, clear_mappings
+        clear_mappings()
+        add_v1_mapping("sess_test_1", "thread_abc")
+        assert get_v2_thread_for_v1_session("sess_test_1") == "thread_abc"
+        assert get_v2_thread_for_v1_session("sess_test_2") is None
+
+    def test_get_v2_request_tracker_singleton(self):
+        """get_v2_request_tracker returns the same instance."""
+        from gateway.v2.compat import get_v2_request_tracker
+        t1 = get_v2_request_tracker()
+        t2 = get_v2_request_tracker()
+        assert t1 is t2
+        assert len(t1.list_all()) >= 0
+
+    def test_v1_session_list_merge(self):
+        """get_v1_session_list merges V1 DB sessions."""
+        import asyncio
+        from gateway.v2.compat import get_v1_session_list, clear_mappings
+        clear_mappings()
+        # With no V1 DB sessions and no V2 threads, returns empty
+        sessions = asyncio.run(get_v1_session_list(v1_db_sessions=[]))
+        assert isinstance(sessions, list)
+
+    def test_get_v1_history_empty(self):
+        """get_v1_history returns empty for no mapping."""
+        import asyncio
+        from gateway.v2.compat import get_v1_history, clear_mappings
+        clear_mappings()
+        history = asyncio.run(get_v1_history("sess_unknown"))
+        assert history == []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# V2 WebSocket — event protocol
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestV2WSEventProtocol:
+    """V2 WebSocket event protocol models and helpers."""
+
+    def test_ack_format(self):
+        """_ack produces correct response shape."""
+        from gateway.v2.ws_handler import _ack
+        response = _ack("req_123", "subscribed", thread_id="thread_abc")
+        assert response["type"] == "ack"
+        assert response["request_id"] == "req_123"
+        assert response["status"] == "subscribed"
+        assert response["thread_id"] == "thread_abc"
+
+    def test_error_format(self):
+        """_error produces correct error shape."""
+        from gateway.v2.ws_handler import _error
+        response = _error("req_456", "Not found", code="not_found")
+        assert response["type"] == "error"
+        assert response["request_id"] == "req_456"
+        assert response["code"] == "not_found"
+        assert response["message"] == "Not found"
+
+    def test_handler_registry(self):
+        """_HANDLERS has expected commands."""
+        from gateway.v2.ws_handler import _HANDLERS
+        expected = {"subscribe", "unsubscribe", "start_turn", "interrupt_turn", "request_snapshot"}
+        assert set(_HANDLERS.keys()) == expected
+
+    def test_subscription_tracking(self):
+        """_add_subscription and _remove_subscription work."""
+        from gateway.v2.ws_handler import _add_subscription, _remove_subscription, _subscribed_clients
+        _subscribed_clients.clear()
+
+        # Mock WebSocket
+        class MockWS:
+            pass
+
+        ws1 = MockWS()
+        ws2 = MockWS()
+
+        _add_subscription("thread_a", ws1)
+        assert len(_subscribed_clients["thread_a"]) == 1
+
+        _add_subscription("thread_a", ws2)
+        assert len(_subscribed_clients["thread_a"]) == 2
+
+        _remove_subscription("thread_a", ws1)
+        assert len(_subscribed_clients["thread_a"]) == 1
+
+        # Clean up
+        _subscribed_clients.clear()

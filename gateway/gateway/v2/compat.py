@@ -42,6 +42,7 @@ from gateway.v2.thread_engine import (
     turn_start,
     turn_complete,
     list_threads_for_session,
+    ThreadOpResult,
 )
 from gateway.v2.session_store import create_server_session, heartbeat
 from gateway.v2.worker import WorkerCommandKind
@@ -64,6 +65,29 @@ _DEFAULT_SERVER_SESSION: str | None = None
 # "v1" to fall back to direct HermesManager. Controlled by ws_handler.
 V2_RUNTIME_MODE: bool = True
 
+# Global request tracker for V2 WebSocket operations
+_v2_request_tracker = None
+
+
+def get_v2_request_tracker():
+    """Get or create the global V2 request tracker."""
+    global _v2_request_tracker
+    if _v2_request_tracker is None:
+        from gateway.v2.requests import RequestTracker
+        _v2_request_tracker = RequestTracker()
+    return _v2_request_tracker
+
+
+def add_v1_mapping(v1_session_id: str, v2_thread_id: str) -> None:
+    """Register a V1 session ID → V2 thread ID mapping."""
+    _session_to_thread[v1_session_id] = v2_thread_id
+    logger.debug("V1 mapping added: %s -> %s", v1_session_id, v2_thread_id)
+
+
+def get_v2_thread_for_v1_session(v1_session_id: str) -> str | None:
+    """Get the V2 thread ID for a V1 session, or None."""
+    return _session_to_thread.get(v1_session_id)
+
 
 async def ensure_default_server_session() -> str:
     """Get or create the default V2 server session.
@@ -82,6 +106,37 @@ async def ensure_default_server_session() -> str:
 def clear_mappings() -> None:
     """Clear all V1→V2 mappings. Used in tests and on reset."""
     _session_to_thread.clear()
+
+
+async def get_or_create_v2_thread_for_v1_session(
+    v1_session_id: str,
+    agent_id: str = "default",
+) -> str:
+    """Get an existing V2 thread for a V1 session, or create one eagerly.
+
+    This ensures every V1 session has a corresponding V2 thread from
+    creation time, so V1 REST reads can be fully backed by V2 data.
+    """
+    existing = _session_to_thread.get(v1_session_id)
+    if existing is not None:
+        return existing
+
+    server_sess_id = await ensure_default_server_session()
+    runtime = RuntimeKind.hermes if agent_id == "hermes-agent" else RuntimeKind.stub
+    result = await thread_start(
+        server_session_id=server_sess_id,
+        runtime_kind=runtime.value,
+        title=f"V1 session {v1_session_id[:8]}",
+    )
+    if not result.ok or result.thread is None:
+        logger.error("Failed to create V2 thread for V1 session %s: %s",
+                      v1_session_id, result.error)
+        # Return empty string so callers can handle gracefully
+        return ""
+    v2_thread_id = result.thread.id
+    _session_to_thread[v1_session_id] = v2_thread_id
+    logger.info("Eagerly mapped V1 session=%s -> V2 thread=%s", v1_session_id, v2_thread_id)
+    return v2_thread_id
 
 
 # ─── Compatibility operations ───────────────────────────────────────────────
@@ -358,15 +413,28 @@ async def persist_agent_reply(
     await turn_complete(v2_turn_id, error=error)
 
 
-# ─── V1 endpoint helpers ────────────────────────────────────────────────────
+# ─── V1 endpoint helpers (fully V2-backed) ──────────────────────────────────
 
 
-async def get_v1_session_list() -> list[dict]:
-    """Produce V1-style session list from V2 threads."""
+async def get_v1_session_list(
+    v1_db_sessions: list | None = None,
+) -> list[dict]:
+    """Produce V1-style session list from V2 threads.
+
+    Args:
+        v1_db_sessions: Optional list of V1 DB Session objects for sessions
+            that haven't had a WS message yet (no V2 thread mapping).
+            When provided, they are merged into the result.
+
+    Returns:
+        List of V1-shaped session dicts.
+    """
     server_id = await ensure_default_server_session()
     threads = await list_threads_for_session(server_id, limit=50)
 
     sessions = []
+    seen_v1_ids: set[str] = set()
+
     for t in threads:
         # Find the V1 session ID that maps to this thread
         v1_sid = None
@@ -377,7 +445,8 @@ async def get_v1_session_list() -> list[dict]:
         if v1_sid is None:
             v1_sid = f"v1_compat_{t.id}"
 
-        # Convert status to V1-compatible active/inactive
+        seen_v1_ids.add(v1_sid)
+
         status_val = t.status.value if hasattr(t.status, 'value') else t.status
         is_active = status_val in ("active",)
 
@@ -387,14 +456,41 @@ async def get_v1_session_list() -> list[dict]:
             "title": t.title,
             "last_message_preview": t.last_message_preview,
             "updated_at": t.updated_at,
-            "message_count": t.turn_count * 2,  # approximate
+            "message_count": t.turn_count * 2,
             "is_active": is_active,
         })
+
+    # Merge V1 DB sessions that don't have V2 threads yet
+    if v1_db_sessions:
+        for s in v1_db_sessions:
+            sid = s.id if hasattr(s, "id") else s.get("id")
+            if sid not in seen_v1_ids:
+                title = s.title if hasattr(s, "title") else s.get("title", "")
+                updated = s.updated_at if hasattr(s, "updated_at") else s.get("updated_at", "")
+                agent_id = s.agent_id if hasattr(s, "agent_id") else s.get("agent_id", "default")
+                sessions.append({
+                    "id": sid,
+                    "agent_id": agent_id,
+                    "title": title,
+                    "last_message_preview": "",
+                    "updated_at": updated,
+                    "message_count": 0,
+                    "is_active": True,
+                })
+
+    # Sort by updated_at descending
+    sessions.sort(key=lambda s: s.get("updated_at", ""), reverse=True)
     return sessions
 
 
-async def get_v1_history(v1_session_id: str) -> list[dict]:
-    """Produce V1-style history from V2 thread items."""
+async def get_v1_history(
+    v1_session_id: str,
+) -> list[dict]:
+    """Produce V1-style history from V2 thread items.
+
+    Returns V1-shaped message list from V2 persistence.
+    Empty list if the session has no V2 mapping.
+    """
     v2_thread_id = _session_to_thread.get(v1_session_id)
     if v2_thread_id is None:
         return []
