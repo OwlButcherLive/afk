@@ -26,3 +26,13 @@ build/
 # Misc
 *.log
 *.tmp
+
+# Gateway — SQLite database
+gateway/gateway.db
+
+# Gateway — virtual environment
+gateway/venv/
+
+# Python cache
+__pycache__/
+*.pyc

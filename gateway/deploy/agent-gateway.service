@@ -1,0 +1,22 @@
+[Unit]
+Description=AFK Agent Gateway — local backend for the AFK Android app
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=debug
+Group=debug
+WorkingDirectory=/srv/agent-gateway
+ExecStart=/srv/agent-gateway/venv/bin/python -m uvicorn gateway.main:app --host 127.0.0.1 --port 3344 --log-level info
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Security hardening — relaxed for local-only dev gateway
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target
