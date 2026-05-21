@@ -6,9 +6,14 @@ import com.owlbutcherlive.afk.core.network.V2Protocol
 import com.owlbutcherlive.afk.core.network.V2ThreadListItem
 import com.owlbutcherlive.afk.core.network.WebSocketClient
 import com.owlbutcherlive.afk.core.network.V2Protocol.V2Event
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.launch
 
 class V2ThreadRepository(private val port: Int) {
     private val api: V2GatewayApi = ApiClient.createApi(V2GatewayApi::class.java)
@@ -20,6 +25,8 @@ class V2ThreadRepository(private val port: Int) {
     private val _threads = MutableStateFlow<List<V2ThreadListItem>>(emptyList())
     val threads: StateFlow<List<V2ThreadListItem>> = _threads.asStateFlow()
 
+    // Internal scope for WS collection — cancelled on disconnect
+    private var wsScope: CoroutineScope? = null
     suspend fun loadThreads(limit: Int = 50): Result<List<V2ThreadListItem>> {
         return try {
             val response = api.listThreads(limit)
@@ -38,7 +45,12 @@ class V2ThreadRepository(private val port: Int) {
     suspend fun connectWs(): Result<Unit> {
         return try {
             ws.connect(port, "/ws/v2/thread")
-            collectWsEvents()
+            // Collect WS events in a background scope so connectWs() can return immediately
+            wsScope?.cancel()
+            wsScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            wsScope!!.launch {
+                collectWsEvents()
+            }
             Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
@@ -72,6 +84,8 @@ class V2ThreadRepository(private val port: Int) {
 
     fun disconnect() {
         ws.disconnect()
+        wsScope?.cancel()
+        wsScope = null
     }
 
     fun sendHeartbeat() {
