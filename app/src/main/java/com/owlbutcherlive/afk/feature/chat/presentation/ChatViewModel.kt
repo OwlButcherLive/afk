@@ -100,8 +100,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 }
                 chatCache.clear()
                 viewModelScope.launch {
-                    // Fetch session details to get the correct agentId for this session
-                    pendingAgentId = fetchSessionAgentId(intent.sessionId)
+                    // Use provided agentId directly (avoids network dependency for fetching it)
+                    // Fall back to API call only when agentId wasn't provided
+                    pendingAgentId = if (intent.agentId.isNotEmpty()) {
+                        intent.agentId
+                    } else {
+                        fetchSessionAgentId(intent.sessionId)
+                    }
                     loadAgents()
                     loadHistory()
                     connectWebSocket()

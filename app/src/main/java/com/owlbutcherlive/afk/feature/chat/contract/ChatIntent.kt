@@ -7,6 +7,10 @@ sealed interface ChatIntent {
     data object RetryLoadHistory : ChatIntent
     data object ScreenResumed : ChatIntent
     data object DismissError : ChatIntent
-    data class LoadSession(val sessionId: String, val sessionTitle: String) : ChatIntent
+    data class LoadSession(
+        val sessionId: String,
+        val sessionTitle: String,
+        val agentId: String = ""
+    ) : ChatIntent
     data object NavigateBack : ChatIntent
 }

@@ -29,7 +29,7 @@ import java.time.temporal.ChronoUnit
 @Composable
 fun SessionsScreen(
     viewModel: SessionsViewModel = viewModel(),
-    onSessionSelected: (sessionId: String, title: String) -> Unit = { _, _ -> },
+    onSessionSelected: (sessionId: String, title: String, agentId: String) -> Unit = { _, _, _ -> },
     onBack: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
@@ -38,7 +38,7 @@ fun SessionsScreen(
         viewModel.effects.collect { effect ->
             when (effect) {
                 is SessionsEffect.NavigateToSession -> {
-                    onSessionSelected(effect.sessionId, effect.sessionTitle)
+                    onSessionSelected(effect.sessionId, effect.sessionTitle, effect.agentId)
                 }
                 SessionsEffect.NavigateBack -> onBack()
             }
@@ -167,7 +167,7 @@ fun SessionsScreen(
                             SessionCard(
                                 session = session,
                                 onClick = {
-                                    onSessionSelected(session.id, session.title)
+                                    onSessionSelected(session.id, session.title, session.agentId)
                                 }
                             )
                         }

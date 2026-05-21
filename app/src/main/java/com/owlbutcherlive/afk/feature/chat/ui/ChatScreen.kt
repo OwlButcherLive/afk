@@ -30,6 +30,7 @@ import kotlinx.coroutines.launch
 fun ChatScreen(
     sessionId: String = "default",
     sessionTitle: String = "Chat",
+    sessionAgentId: String = "",
     viewModel: ChatViewModel = viewModel(),
     onBack: () -> Unit = {}
 ) {
@@ -51,7 +52,9 @@ fun ChatScreen(
     // Load the requested session when sessionId changes
     LaunchedEffect(sessionId) {
         if (sessionId.isNotEmpty()) {
-            viewModel.processIntent(ChatIntent.LoadSession(sessionId, sessionTitle))
+            viewModel.processIntent(
+                ChatIntent.LoadSession(sessionId, sessionTitle, sessionAgentId)
+            )
         }
     }
 

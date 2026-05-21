@@ -119,7 +119,8 @@ class SessionsViewModel(application: Application) : AndroidViewModel(application
                     _effects.send(
                         SessionsEffect.NavigateToSession(
                             sessionId = session.id,
-                            sessionTitle = session.title
+                            sessionTitle = session.title,
+                            agentId = session.agentId
                         )
                     )
                 } else {

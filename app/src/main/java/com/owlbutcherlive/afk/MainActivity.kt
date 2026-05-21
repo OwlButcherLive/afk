@@ -19,7 +19,11 @@ private sealed interface Screen {
     data object Connection : Screen
     data object Dashboard : Screen
     data object Sessions : Screen
-    data class Chat(val sessionId: String, val sessionTitle: String) : Screen
+    data class Chat(
+        val sessionId: String,
+        val sessionTitle: String,
+        val agentId: String = ""
+    ) : Screen
 }
 
 class MainActivity : ComponentActivity() {
@@ -50,8 +54,8 @@ class MainActivity : ComponentActivity() {
                     }
                     is Screen.Sessions -> {
                         SessionsScreen(
-                            onSessionSelected = { sessionId, title ->
-                                screen = Screen.Chat(sessionId, title)
+                            onSessionSelected = { sessionId, title, agentId ->
+                                screen = Screen.Chat(sessionId, title, agentId)
                             },
                             onBack = {
                                 screen = Screen.Dashboard
@@ -64,6 +68,7 @@ class MainActivity : ComponentActivity() {
                         ChatScreen(
                             sessionId = chat.sessionId,
                             sessionTitle = chat.sessionTitle,
+                            sessionAgentId = chat.agentId,
                             onBack = {
                                 screen = Screen.Sessions
                             }
