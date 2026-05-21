@@ -5,10 +5,11 @@ Endpoint: /ws/v2/thread
 Protocol:
   Client sends JSON messages with:
     type: string — command type
-    thread_id: string — V2 thread ID
+    thread_id: string — V2 thread ID (required for thread commands)
     request_id: string — correlation ID for request/response
 
   Commands:
+    hello              — initialize session, get protocol version + runtimes
     subscribe          — subscribe to thread events
     unsubscribe        — stop receiving events for a thread
     start_turn         — start a new turn and dispatch to runtime
@@ -22,13 +23,15 @@ Protocol:
     ... event-specific fields
 
   Event types:
-    thread_snapshot   — full thread state
-    turn_started      — turn was created and dispatched
-    item_appended     — new ThreadItem produced during execution
-    turn_completed    — turn finished successfully
-    turn_failed       — turn failed
-    error             — error response
-    ack               — acknowledge command receipt
+    hello_response     — response to hello (protocol info, runtimes, session)
+    thread_snapshot    — full thread state
+    turn_started       — turn was created and dispatched
+    item_appended      — new ThreadItem produced during execution
+    turn_completed     — turn finished successfully
+    turn_failed        — turn failed
+    error              — error response
+    ack                — acknowledge command receipt
+    pong               — heartbeat response
 """
 
 from __future__ import annotations
@@ -328,7 +331,39 @@ async def _handle_request_snapshot(ws: WebSocket, msg: dict) -> dict | None:
     return _ack(request_id, "snapshot_sent", thread_id=thread_id)
 
 
+async def _handle_hello(ws: WebSocket, msg: dict) -> dict | None:
+    """Handle hello command — initialize session and return protocol info."""
+    request_id = msg.get("request_id", "")
+
+    server_id = await v2_compat.ensure_default_server_session()
+
+    # Available runtimes
+    runtimes = []
+    try:
+        from gateway.main import get_worker_pool
+        pool = get_worker_pool()
+        workers = pool.list_workers()
+        for w in workers:
+            runtimes.append({"kind": w["kind"], "status": w["status"]})
+    except Exception:
+        runtimes.append({"kind": "unknown", "status": "unavailable"})
+
+    await _send_event(ws, {
+        "type": "hello_response",
+        "request_id": request_id,
+        "protocol_version": "2.0.0",
+        "server_session_id": server_id,
+        "runtimes": runtimes,
+        "endpoints": {
+            "ws_v2_thread": "/ws/v2/thread",
+            "rest_v2_threads": "/api/v2/threads",
+        },
+    })
+    return None
+
+
 _HANDLERS = {
+    "hello": _handle_hello,
     "subscribe": _handle_subscribe,
     "unsubscribe": _handle_unsubscribe,
     "start_turn": _handle_start_turn,

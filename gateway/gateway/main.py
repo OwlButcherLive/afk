@@ -18,7 +18,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from gateway import database as db
 from gateway.hermes_manager import HermesManager
-from gateway.router import router, set_hermes_manager as router_set_hermes
+from gateway.router import router, set_hermes_manager as router_set_hermes, set_worker_pool as router_set_worker_pool
 from gateway.v2 import database as v2db
 from gateway.v2.health import HealthMonitor
 from gateway.v2.runtime import HermesRuntime
@@ -73,6 +73,7 @@ async def lifespan(app: FastAPI):
         kind="hermes",
         runtime_factory=lambda: HermesRuntime(hermes),
     )
+    router_set_worker_pool(pool)
     monitor = get_health_monitor()
     await monitor.start_monitoring()
     logger.info("V2 runtime system initialized (workers: 1, health monitoring: active).")

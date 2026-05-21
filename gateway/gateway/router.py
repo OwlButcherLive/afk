@@ -8,10 +8,10 @@ All data-reading endpoints are now fully V2-backed:
   POST /chat/sessions      — V1 DB session + eager V2 thread mapping
   GET /health              — no change
 
-V1 DB remains for:
-- Session validation in ws_handler (existence checks)
-- Agent seeding (stable at startup)
-- Post-creation session persistence (eager V2 thread mapping)
+V2-native endpoints (projection layer, no V1 compat):
+  GET /api/v2/threads      — list threads for default server session
+  GET /api/v2/threads/{id} — thread detail with snapshot
+  GET /api/v2/runtimes     — available runtime kinds and status
 """
 
 import logging
@@ -22,6 +22,8 @@ from pydantic import BaseModel
 from gateway import database as db
 from gateway.hermes_manager import HermesManager
 from gateway.v2 import compat as v2_compat
+from gateway.v2.projection import build_thread_list, build_thread_projection
+from gateway.v2.worker import WorkerPool
 
 logger = logging.getLogger("gateway.router")
 
@@ -29,11 +31,17 @@ router = APIRouter()
 
 # Set during lifespan in main.py
 _hermes_manager: HermesManager | None = None
+_worker_pool: WorkerPool | None = None
 
 
 def set_hermes_manager(hm: HermesManager) -> None:
     global _hermes_manager
     _hermes_manager = hm
+
+
+def set_worker_pool(pool: WorkerPool) -> None:
+    global _worker_pool
+    _worker_pool = pool
 
 
 # ─── Response models ─────────────────────────────────────────────────────────
@@ -218,3 +226,113 @@ async def hermes_status():
         "deep_probe_ok": status.deep_probe_ok,
         "deep_probe_error": status.deep_probe_error,
     }
+
+
+# ─── V2-native REST endpoints (projection layer) ────────────────────────────
+
+
+class V2ThreadListItem(BaseModel):
+    id: str
+    title: str
+    status: str
+    runtime_kind: str
+    turn_count: int
+    last_message_preview: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+    is_active: bool = True
+
+
+class V2ThreadListResponse(BaseModel):
+    threads: list[V2ThreadListItem]
+
+
+class V2ThreadDetailResponse(BaseModel):
+    id: str
+    title: str
+    status: str
+    runtime_kind: str
+    turn_count: int
+    active_turn_id: str = ""
+    active_turn_status: str = ""
+    items: list[dict] = []
+    last_message_preview: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+
+
+class V2RuntimeItem(BaseModel):
+    kind: str
+    status: str = "unknown"
+    active_turns: int = 0
+    worker_count: int = 0
+
+
+class V2RuntimeListResponse(BaseModel):
+    runtimes: list[V2RuntimeItem]
+
+
+@router.get("/api/v2/threads", response_model=V2ThreadListResponse)
+async def v2_list_threads(limit: int = Query(50, ge=1, le=200, description="Max threads")):
+    """List all V2 threads for the default server session."""
+    server_id = await v2_compat.ensure_default_server_session()
+    items = await build_thread_list(server_id, limit=limit)
+    return V2ThreadListResponse(
+        threads=[
+            V2ThreadListItem(
+                id=t.id,
+                title=t.title,
+                status=t.status,
+                runtime_kind=t.runtime_kind,
+                turn_count=t.turn_count,
+                last_message_preview=t.last_message_preview,
+                created_at=t.created_at,
+                updated_at=t.updated_at,
+                is_active=t.is_active,
+            )
+            for t in items
+        ]
+    )
+
+
+@router.get("/api/v2/threads/{thread_id}", response_model=V2ThreadDetailResponse)
+async def v2_get_thread(thread_id: str):
+    """Get a V2 thread by ID with full detail (items, turn state)."""
+    projection = await build_thread_projection(thread_id, include_items=True)
+    if projection is None:
+        raise HTTPException(status_code=404, detail=f"Thread '{thread_id}' not found")
+    return V2ThreadDetailResponse(
+        id=projection.id,
+        title=projection.title,
+        status=projection.status,
+        runtime_kind=projection.runtime_kind,
+        turn_count=projection.turn_count,
+        active_turn_id=projection.active_turn_id,
+        active_turn_status=projection.active_turn_status,
+        items=projection.items,
+        last_message_preview=projection.last_message_preview,
+        created_at=projection.created_at,
+        updated_at=projection.updated_at,
+    )
+
+
+@router.get("/api/v2/runtimes", response_model=V2RuntimeListResponse)
+async def v2_list_runtimes():
+    """List available V2 runtime kinds and their status."""
+    runtimes: list[V2RuntimeItem] = []
+    if _worker_pool is not None:
+        workers = _worker_pool.list_workers()
+        seen: set[str] = set()
+        for w in workers:
+            kind = w.get("kind", "unknown")
+            if kind not in seen:
+                seen.add(kind)
+                runtimes.append(V2RuntimeItem(
+                    kind=kind,
+                    status=w.get("status", "idle"),
+                    active_turns=w.get("active_turns", 0),
+                    worker_count=1,
+                ))
+    if not runtimes:
+        runtimes.append(V2RuntimeItem(kind="unknown", status="unavailable"))
+    return V2RuntimeListResponse(runtimes=runtimes)

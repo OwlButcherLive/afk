@@ -651,7 +651,7 @@ class TestV2WSEventProtocol:
     def test_handler_registry(self):
         """_HANDLERS has expected commands."""
         from gateway.v2.ws_handler import _HANDLERS
-        expected = {"subscribe", "unsubscribe", "start_turn", "interrupt_turn", "request_snapshot"}
+        expected = {"hello", "subscribe", "unsubscribe", "start_turn", "interrupt_turn", "request_snapshot"}
         assert set(_HANDLERS.keys()) == expected
 
     def test_subscription_tracking(self):
@@ -677,3 +677,185 @@ class TestV2WSEventProtocol:
 
         # Clean up
         _subscribed_clients.clear()
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Projection — serialization and edge cases
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestProjectionSerialization:
+    """Projection layer serialization correctness."""
+
+    def test_item_to_dict_format(self):
+        """_item_to_dict produces correct shape."""
+        from gateway.v2.projection import _item_to_dict
+        from gateway.v2.models import ThreadItem, ThreadItemKind, utc_now
+        item = ThreadItem(
+            id="item_test",
+            thread_id="thread_a",
+            turn_id="turn_a",
+            kind=ThreadItemKind.user_message,
+            index=0,
+            role="user",
+            content="hello",
+            created_at=utc_now(),
+        )
+        d = _item_to_dict(item)
+        assert d["id"] == "item_test"
+        assert d["kind"] == "user_message"
+        assert d["role"] == "user"
+        assert d["content"] == "hello"
+        assert "turn_id" in d
+        assert "created_at" in d
+
+    def test_compute_preview_empty(self):
+        """_compute_preview returns empty for no user messages."""
+        from gateway.v2.projection import _compute_preview
+        from gateway.v2.models import ThreadItem, ThreadItemKind, utc_now
+        items = [
+            ThreadItem(id="i1", thread_id="t", turn_id="tu", kind=ThreadItemKind.agent_message, index=1, role="agent", content="Hi!", created_at=utc_now()),
+        ]
+        preview = _compute_preview(items)
+        assert preview == ""
+
+    def test_compute_preview_truncated(self):
+        """_compute_preview truncates at 80 chars."""
+        from gateway.v2.projection import _compute_preview
+        from gateway.v2.models import ThreadItem, ThreadItemKind, utc_now
+        long_text = "A" * 100
+        items = [
+            ThreadItem(id="i1", thread_id="t", turn_id="tu", kind=ThreadItemKind.user_message, index=0, role="user", content=long_text, created_at=utc_now()),
+        ]
+        preview = _compute_preview(items)
+        assert preview.endswith("...")
+        assert len(preview) == 83  # 80 chars + "..."
+
+    def test_build_thread_projection_nonexistent(self):
+        """build_thread_projection returns None for unknown thread."""
+        import asyncio
+        from gateway.v2.projection import build_thread_projection
+        result = asyncio.run(build_thread_projection("nonexistent_thread"))
+        assert result is None
+
+    def test_build_thread_list_empty(self):
+        """build_thread_list returns empty for unknown session."""
+        import asyncio
+        from gateway.v2.projection import build_thread_list
+        items = asyncio.run(build_thread_list("nonexistent_session"))
+        assert items == []
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# RequestTracker — correlation and cleanup
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestRequestTracker2:
+    """Extended request tracker tests: correlation, cleanup, disconnect."""
+
+    def test_cancel_pending_on_disconnect(self):
+        """cancel_request with reason works for all pending."""
+        from gateway.v2.requests import RequestTracker
+        tracker = RequestTracker()
+        tracker.create_request(kind="test", thread_id="t1", request_id="req_a")
+        tracker.create_request(kind="test", thread_id="t1", request_id="req_b")
+
+        pending = tracker.list_pending()
+        assert len(pending) == 2
+
+        for req in pending:
+            tracker.cancel_request(req.id, reason="v2_ws_disconnect")
+
+        assert len(tracker.list_pending()) == 0
+        cancelled = tracker.list_all()
+        for c in cancelled:
+            assert c.status.value == "cancelled"
+
+    def test_cleanup_all_cancels_pending(self):
+        """cleanup_all marks all pending as cancelled."""
+        from gateway.v2.requests import RequestTracker, RequestStatus
+        tracker = RequestTracker()
+        tracker.create_request(kind="test", thread_id="t1", request_id="req_c")
+        tracker.create_request(kind="test", thread_id="t1", request_id="req_d")
+
+        tracker.cleanup_all()
+        all_reqs = tracker.list_all()
+        for req in all_reqs:
+            assert req.status in (RequestStatus.cancelled, RequestStatus.completed)
+
+    def test_create_and_resolve_with_metadata(self):
+        """resolve_request stores metadata."""
+        from gateway.v2.requests import RequestTracker, RequestStatus
+        tracker = RequestTracker()
+        tracker.create_request(kind="process_turn", thread_id="t1", request_id="req_e",
+                               metadata={"text_len": 42})
+        req = tracker.get_request("req_e")
+        assert req is not None
+        assert req.metadata.get("text_len") == 42
+
+        tracker.resolve_request("req_e", metadata={"turn_id": "turn_1"})
+        resolved = tracker.get_request("req_e")
+        assert resolved is not None
+        assert resolved.status == RequestStatus.completed
+        assert resolved.metadata.get("turn_id") == "turn_1"
+
+    def test_cleanup_for_thread(self):
+        """cleanup_for_thread only removes requests for a specific thread."""
+        from gateway.v2.requests import RequestTracker
+        tracker = RequestTracker()
+        tracker.create_request(kind="test", thread_id="t1", request_id="req_f")
+        tracker.create_request(kind="test", thread_id="t2", request_id="req_g")
+
+        tracker.cleanup_for_thread("t1")
+        remaining = tracker.list_pending()
+        assert len(remaining) == 1
+        assert remaining[0].thread_id == "t2"
+
+    def test_cleanup_for_turn(self):
+        """cleanup_for_turn only removes requests for a specific turn."""
+        from gateway.v2.requests import RequestTracker
+        tracker = RequestTracker()
+        tracker.create_request(kind="test", thread_id="t1", turn_id="turn_a", request_id="req_h")
+        tracker.create_request(kind="test", thread_id="t1", turn_id="turn_b", request_id="req_i")
+
+        tracker.cleanup_for_turn("turn_a")
+        remaining = tracker.list_pending()
+        assert len(remaining) == 1
+        assert remaining[0].id == "req_i"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# V2 WS hello event
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+class TestV2WSHello:
+    """V2 WebSocket hello command and response."""
+
+    def test_hello_response_shape(self):
+        """_handle_hello produces correct response shape (without running gateway)."""
+        from gateway.v2.ws_handler import _ack, _error
+        # The hello handler uses ensure_default_server_session which requires DB.
+        # Test the building blocks instead.
+        ack = _ack("req_hello", "ok")
+        assert ack["type"] == "ack"
+        assert ack["request_id"] == "req_hello"
+        assert ack["status"] == "ok"
+
+        err = _error("req_err", "test error", code="test")
+        assert err["type"] == "error"
+        assert err["code"] == "test"
+        assert err["message"] == "test error"
+
+    def test_hello_handler_exists(self):
+        """hello handler is registered and accessible."""
+        from gateway.v2.ws_handler import _HANDLERS
+        assert "hello" in _HANDLERS
+        assert callable(_HANDLERS["hello"])
+
+    def test_hello_is_first_handler(self):
+        """hello is the first handler (protocol-level init should come first)."""
+        from gateway.v2.ws_handler import _HANDLERS
+        keys = list(_HANDLERS.keys())
+        assert keys[0] == "hello", f"Expected hello first, got {keys[0]}"

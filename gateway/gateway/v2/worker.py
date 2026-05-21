@@ -222,3 +222,16 @@ class WorkerPool:
             logger.info("Shutting down pool worker: kind=%s", kind)
             await worker.shutdown()
         self._workers.clear()
+
+    def list_workers(self) -> list[dict]:
+        """Return info about each registered worker."""
+        result = []
+        for kind, worker in self._workers.items():
+            runtime_kind = worker.runtime.kind if hasattr(worker.runtime, 'kind') else kind
+            result.append({
+                "kind": runtime_kind,
+                "worker_id": worker.worker_id,
+                "status": "running" if worker.is_running else "stopped",
+                "active_turns": 0,
+            })
+        return result

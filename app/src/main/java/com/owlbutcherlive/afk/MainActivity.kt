@@ -11,6 +11,7 @@ import com.owlbutcherlive.afk.feature.connection.ui.ConnectionScreen
 import com.owlbutcherlive.afk.feature.dashboard.ui.DashboardScreen
 import com.owlbutcherlive.afk.feature.chat.ui.ChatScreen
 import com.owlbutcherlive.afk.feature.sessions.ui.SessionsScreen
+import com.owlbutcherlive.afk.feature.v2threads.ui.V2ThreadsScreen
 
 /**
  * Navigation state for the main screens.
@@ -19,6 +20,7 @@ private sealed interface Screen {
     data object Connection : Screen
     data object Dashboard : Screen
     data object Sessions : Screen
+    data object V2Threads : Screen
     data class Chat(
         val sessionId: String,
         val sessionTitle: String,
@@ -49,6 +51,9 @@ class MainActivity : ComponentActivity() {
                             },
                             onSessionsList = {
                                 screen = Screen.Sessions
+                            },
+                            onV2Debug = {
+                                screen = Screen.V2Threads
                             }
                         )
                     }
@@ -57,6 +62,13 @@ class MainActivity : ComponentActivity() {
                             onSessionSelected = { sessionId, title, agentId ->
                                 screen = Screen.Chat(sessionId, title, agentId)
                             },
+                            onBack = {
+                                screen = Screen.Dashboard
+                            }
+                        )
+                    }
+                    is Screen.V2Threads -> {
+                        V2ThreadsScreen(
                             onBack = {
                                 screen = Screen.Dashboard
                             }

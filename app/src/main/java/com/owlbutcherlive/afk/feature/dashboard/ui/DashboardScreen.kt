@@ -23,7 +23,8 @@ import com.owlbutcherlive.afk.feature.dashboard.presentation.DashboardViewModel
 fun DashboardScreen(
     viewModel: DashboardViewModel = viewModel(),
     onDisconnected: () -> Unit = {},
-    onSessionsList: () -> Unit = {}
+    onSessionsList: () -> Unit = {},
+    onV2Debug: () -> Unit = {}
 ) {
     val state by viewModel.state.collectAsStateWithLifecycle()
 
@@ -78,6 +79,18 @@ fun DashboardScreen(
                 Icon(Icons.Default.Forum, contentDescription = null)
                 Spacer(Modifier.width(8.dp))
                 Text("Conversations")
+            }
+
+            // V2 debug
+            OutlinedButton(
+                onClick = onV2Debug,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp)
+            ) {
+                Icon(Icons.Default.BugReport, contentDescription = null)
+                Spacer(Modifier.width(8.dp))
+                Text("V2 Debug")
             }
 
             Spacer(modifier = Modifier.weight(1f))
