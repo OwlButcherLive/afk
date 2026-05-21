@@ -7,6 +7,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.withContext
 import net.schmizz.sshj.SSHClient
+import net.schmizz.sshj.common.SecurityUtils
 import net.schmizz.sshj.connection.channel.direct.LocalPortForwarder
 import net.schmizz.sshj.connection.channel.direct.Parameters
 import net.schmizz.sshj.transport.verification.PromiscuousVerifier
@@ -23,6 +24,16 @@ class TunnelManager {
 
     companion object {
         private const val TAG = "TunnelManager"
+
+        init {
+            // Tell SSHJ to skip Bouncy Castle provider registration.
+            // Android's bundled BC provider (boot classloader) is stripped and
+            // doesn't include X25519 or EC algorithms. SSHJ's SecurityUtils
+            // would find the system BC and fail on any crypto call using those
+            // algorithms. Instead, we rely on Android's Conscrypt/AndroidOpenSSL
+            // provider which handles all algorithms SSHJ needs (DH, EC, ECDH).
+            SecurityUtils.setRegisterBouncyCastle(false)
+        }
     }
 
     private val _connectionState = MutableStateFlow<SshConnectionResult>(SshConnectionResult.Disconnected)
