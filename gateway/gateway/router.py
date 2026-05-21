@@ -1,5 +1,7 @@
 """REST API routes for the Agent Gateway."""
 
+import logging
+
 from fastapi import APIRouter, HTTPException, Query
 
 from gateway import database as db
@@ -13,6 +15,8 @@ from gateway.models import (
     SessionResponse,
     SessionsListResponse,
 )
+
+logger = logging.getLogger("gateway.router")
 
 router = APIRouter()
 
@@ -98,11 +102,26 @@ async def get_session(session_id: str):
 @router.get("/agents/hermes-agent/status", response_model=HermesStatusResponse)
 async def hermes_status():
     if _hermes_manager is None:
-        return HermesStatusResponse(available=False, error="Hermes manager not initialized")
+        logger.warning("Hermes status queried but manager not initialized")
+        return HermesStatusResponse(
+            available=False,
+            error="Hermes manager not initialized",
+            usable=False,
+            usable_reason="HermesManager was never initialized during gateway startup",
+        )
     status = await _hermes_manager.get_status()
+    logger.info(
+        "Hermes status queried — available=%s, executable=%s, version=%s, usable=%s",
+        status.available, status.executable_path,
+        status.version, status.usable,
+    )
     return HermesStatusResponse(
         available=status.available,
         version=status.version,
         busy=status.busy,
         error=status.error,
+        executable_path=status.executable_path,
+        candidates_checked=status.candidates_checked,
+        usable=status.usable,
+        usable_reason=status.usable_reason,
     )

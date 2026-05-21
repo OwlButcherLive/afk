@@ -74,6 +74,10 @@ class HermesStatusResponse(BaseModel):
     version: str = ""
     busy: bool = False
     error: str = ""
+    executable_path: str = ""
+    candidates_checked: list[str] = []
+    usable: bool = False
+    usable_reason: str = ""
 
 
 # ─── WebSocket message models ────────────────────────────────────────────────

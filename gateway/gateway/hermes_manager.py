@@ -13,7 +13,7 @@ refers to the tmux-spawning pattern for autonomous workers
 import asyncio
 import logging
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 logger = logging.getLogger("gateway.hermes")
 
@@ -33,6 +33,10 @@ class HermesStatus:
     version: str = ""
     busy: bool = False
     error: str = ""
+    executable_path: str = ""
+    candidates_checked: list[str] = field(default_factory=list)
+    usable: bool = False
+    usable_reason: str = ""
 
 
 @dataclass
@@ -43,6 +47,7 @@ class HermesResult:
     text: str = ""
     error: str = ""
     duration_ms: int = 0
+    executable: str = ""
 
 
 class HermesManager:
@@ -59,11 +64,14 @@ class HermesManager:
         self._busy: bool = False
         self._lock = asyncio.Lock()
         self._initialized: bool = False
+        self._candidates_checked: list[str] = []
 
     async def initialize(self) -> None:
         """Discover hermes binary and version. Safe to call repeatedly."""
         if self._initialized:
             return
+
+        self._candidates_checked = list(_HERMES_CANDIDATES)
 
         for candidate in _HERMES_CANDIDATES:
             try:
@@ -81,14 +89,28 @@ class HermesManager:
                     self._version = version_line
                     self._initialized = True
                     logger.info(
-                        "Hermes Agent available: %s (%s)",
+                        "Hermes Agent available — executable=%s, version=%s",
                         candidate, version_line,
                     )
                     return
-            except (FileNotFoundError, asyncio.TimeoutError, OSError):
+                logger.debug(
+                    "Hermes candidate %s returned exit %d",
+                    candidate, proc.returncode,
+                )
+            except FileNotFoundError:
+                logger.debug("Hermes candidate %s not found on PATH", candidate)
+                continue
+            except asyncio.TimeoutError:
+                logger.debug("Hermes candidate %s timed out", candidate)
+                continue
+            except OSError as exc:
+                logger.debug("Hermes candidate %s error: %s", candidate, exc)
                 continue
 
-        logger.warning("Hermes CLI not found on this system")
+        logger.warning(
+            "Hermes CLI not found on this system — checked %d candidates",
+            len(_HERMES_CANDIDATES),
+        )
         self._initialized = True
 
     async def get_status(self) -> HermesStatus:
@@ -100,12 +122,23 @@ class HermesManager:
             return HermesStatus(
                 available=False,
                 error="Hermes CLI not found on this system",
+                candidates_checked=self._candidates_checked,
+                usable=False,
+                usable_reason=(
+                    "No hermes executable found. Checked candidates: "
+                    f"{', '.join(self._candidates_checked)}. "
+                    "Install Hermes Agent to enable this agent."
+                ),
             )
 
         return HermesStatus(
             available=True,
             version=self._version,
             busy=self._busy,
+            executable_path=self._hermes_path,
+            candidates_checked=self._candidates_checked,
+            usable=True,
+            usable_reason="Hermes CLI discovered and ready",
         )
 
     async def send_task(
@@ -119,12 +152,27 @@ class HermesManager:
         response text, stripped of status banners and session metadata.
         """
         if not self._hermes_path:
+            logger.warning(
+                "Hermes send_task requested but no executable found — "
+                "trying rediscovery"
+            )
             init_ok = await self._try_discover()
             if not init_ok:
+                logger.error(
+                    "Hermes send_task failed — CLI not available "
+                    "(checked: %s)",
+                    ", ".join(self._candidates_checked),
+                )
                 return HermesResult(
                     success=False,
-                    error="Hermes CLI is not available on the server.",
+                    error="Hermes CLI is not available on the server. "
+                          "Install Hermes Agent to enable this agent.",
                 )
+
+        logger.info(
+            "Hermes send_task — executable=%s, chars=%d, timeout=%.0fs",
+            self._hermes_path, len(message), timeout,
+        )
 
         async with self._lock:
             self._busy = True
@@ -132,11 +180,6 @@ class HermesManager:
         try:
             import time
             start = time.monotonic()
-
-            logger.info(
-                "Hermes task: submitting %d chars",
-                len(message),
-            )
 
             proc = await asyncio.create_subprocess_exec(
                 self._hermes_path, "chat", "-q", message, "-Q",
@@ -152,11 +195,15 @@ class HermesManager:
             except asyncio.TimeoutError:
                 proc.kill()
                 elapsed = int((time.monotonic() - start) * 1000)
-                logger.error("Hermes task timed out after %dms", elapsed)
+                logger.error(
+                    "Hermes task timed out — executable=%s, duration=%dms",
+                    self._hermes_path, elapsed,
+                )
                 return HermesResult(
                     success=False,
                     error="Hermes task timed out. The agent is still thinking.",
                     duration_ms=elapsed,
+                    executable=self._hermes_path or "",
                 )
 
             elapsed = int((time.monotonic() - start) * 1000)
@@ -165,34 +212,43 @@ class HermesManager:
 
             if proc.returncode != 0:
                 logger.error(
-                    "Hermes task failed (exit=%d): %s",
-                    proc.returncode, err_text[:500],
+                    "Hermes task failed — executable=%s, exit=%d, "
+                    "stderr_preview=%s, duration=%dms",
+                    self._hermes_path, proc.returncode,
+                    err_text[:200].strip(), elapsed,
                 )
                 return HermesResult(
                     success=False,
                     error=f"Hermes process failed (exit {proc.returncode}): "
                           f"{_clean_text(err_text)[:300]}",
                     duration_ms=elapsed,
+                    executable=self._hermes_path or "",
                 )
 
             response = _extract_response(out_text)
             logger.info(
-                "Hermes task completed in %dms, %d chars of response, "
-                "raw was %d chars",
-                elapsed, len(response), len(out_text),
+                "Hermes task completed — executable=%s, duration=%dms, "
+                "response_chars=%d, raw_was=%d",
+                self._hermes_path, elapsed,
+                len(response), len(out_text),
             )
 
             return HermesResult(
                 success=True,
                 text=response,
                 duration_ms=elapsed,
+                executable=self._hermes_path or "",
             )
 
         except Exception as exc:
-            logger.error("Hermes task error: %s", exc)
+            logger.error(
+                "Hermes task internal error — executable=%s, error=%s",
+                self._hermes_path, exc,
+            )
             return HermesResult(
                 success=False,
                 error=f"Internal error: {exc}",
+                executable=self._hermes_path or "",
             )
         finally:
             async with self._lock:
@@ -206,11 +262,15 @@ class HermesManager:
 
     async def cleanup(self) -> None:
         """Release any held resources."""
+        logger.info(
+            "Hermes Manager cleanup — was using executable=%s",
+            self._hermes_path or "(none)",
+        )
         self._hermes_path = None
         self._version = ""
         self._busy = False
         self._initialized = False
-        logger.info("Hermes Manager resources released.")
+        self._candidates_checked = []
 
 
 def _clean_text(text: str) -> str:
@@ -245,8 +305,10 @@ def _extract_response(raw: str) -> str:
         flags=re.MULTILINE,
     )
     if text != text_before:
-        logger.info("_extract_response: stripped warning banner (%d chars removed)",
-                     len(text_before) - len(text))
+        logger.info(
+            f"_extract_response: stripped warning banner "
+            f"({len(text_before) - len(text)} chars removed)"
+        )
 
     # Remove session_id line
     text = re.sub(r"^session_id:\s*\S+\s*$", "", text, flags=re.MULTILINE)
@@ -264,6 +326,9 @@ def _extract_response(raw: str) -> str:
     result = text.strip()
 
     if not result or len(result) < 5:
-        logger.warning("_extract_response: stripped to near-empty, returning raw")
+        logger.warning(
+            f"_extract_response: stripped to {len(result)} chars, "
+            f"falling back to raw"
+        )
         return raw.strip()
     return result

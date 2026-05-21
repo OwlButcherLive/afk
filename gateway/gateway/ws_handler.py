@@ -152,18 +152,44 @@ async def handle_chat_ws(websocket: WebSocket) -> None:
 
             # ── Step 3: Generate reply ──
             if msg.agent_id == "hermes-agent" and _hermes_manager is not None:
+                logger.info(
+                    "Agent branch: hermes-agent — delegating to HermesManager "
+                    "(session=%s, user_message_len=%d)",
+                    msg.session_id, len(msg.text),
+                )
                 # Route through real Hermes CLI
                 hermes_result = await _hermes_manager.send_task(msg.text, timeout=120.0)
                 if hermes_result.success:
                     reply_text = hermes_result.text
+                    logger.info(
+                        "Hermes replied successfully — executable=%s, "
+                        "duration=%dms, response_chars=%d",
+                        hermes_result.executable,
+                        hermes_result.duration_ms,
+                        len(hermes_result.text),
+                    )
                 else:
                     reply_text = f"⚠️ Hermes error: {hermes_result.error}"
-                logger.info(
-                    f"Hermes replied in {hermes_result.duration_ms}ms "
-                    f"(success={hermes_result.success})"
+                    logger.error(
+                        "Hermes reply FAILED — executable=%s, "
+                        "duration=%dms, error=%s",
+                        hermes_result.executable,
+                        hermes_result.duration_ms,
+                        hermes_result.error[:200],
+                    )
+            elif _hermes_manager is None and msg.agent_id == "hermes-agent":
+                logger.warning(
+                    "Agent branch: hermes-agent selected but HermesManager is None — "
+                    "falling back to stub (session=%s)",
+                    msg.session_id,
                 )
+                reply_text = _stub_reply(msg.text)
             else:
                 # Standard stub reply for non-Hermes agents
+                logger.info(
+                    "Agent branch: stub — agent_id=%s (session=%s)",
+                    msg.agent_id, msg.session_id,
+                )
                 reply_text = _stub_reply(msg.text)
 
             # ── Step 4: Persist agent reply ──

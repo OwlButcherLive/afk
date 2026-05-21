@@ -158,11 +158,105 @@ async def test_ws():
         print("\n  ✅ All WebSocket tests passed")
 
 
-async def main():
-    test_rest()
-    await test_ws()
-    print("\n✅✅✅ ALL TESTS PASSED ✅✅✅")
+def test_agent_selection():
+    """Verify agent list contains both default and hermes-agent."""
+    print("\n--- Agent selection tests ---")
+
+    resp = urllib.request.urlopen(f"{BASE}/chat/agents")
+    data = json.loads(resp.read())
+    agent_ids = {a["id"] for a in data["agents"]}
+
+    assert "default" in agent_ids, "Default agent missing"
+    assert "hermes-agent" in agent_ids, "Hermes agent missing"
+    print(f"  ✅ Agents found: {', '.join(sorted(agent_ids))}")
+
+    # Verify hermes-agent has the right name
+    hermes = [a for a in data["agents"] if a["id"] == "hermes-agent"][0]
+    assert "Hermes" in hermes["name"], f"Unexpected name: {hermes['name']}"
+    print(f"  ✅ Hermes agent name: {hermes['name']}")
+
+    print("  ✅ All agent selection tests passed")
+
+
+def test_hermes_status_endpoint():
+    """Verify the hermes status endpoint returns expected fields."""
+    print("\n--- Hermes status endpoint tests ---")
+
+    resp = urllib.request.urlopen(f"{BASE}/agents/hermes-agent/status")
+    data = json.loads(resp.read())
+
+    assert "available" in data
+    assert "executable_path" in data
+    assert "candidates_checked" in data
+    assert "usable" in data
+    assert "usable_reason" in data
+    assert "version" in data
+
+    print(f"  ✅ available: {data['available']}")
+    print(f"  ✅ executable_path: {data['executable_path']}")
+    print(f"  ✅ candidates_checked: {data['candidates_checked']}")
+    print(f"  ✅ usable: {data['usable']}")
+    print(f"  ✅ usable_reason: {data['usable_reason']}")
+    print(f"  ✅ version: {data['version']}")
+    print("  ✅ All hermes status tests passed")
+
+
+def test_create_session_with_hermes():
+    """Verify sessions can be created for hermes-agent."""
+    print("\n--- Hermes session creation tests ---")
+
+    sess_id = _create_session_for_agent("hermes-agent")
+    assert sess_id.startswith("sess_"), f"Bad session ID: {sess_id}"
+    print(f"  ✅ Created session: {sess_id}")
+
+    # Verify session has correct agent_id
+    resp = urllib.request.urlopen(f"{BASE}/chat/sessions/{sess_id}")
+    data = json.loads(resp.read())
+    assert data["agent_id"] == "hermes-agent", f"Wrong agent: {data['agent_id']}"
+    print(f"  ✅ Session agent_id: {data['agent_id']}")
+
+    print("  ✅ All hermes session tests passed")
+
+
+def test_unknown_agent_rejected():
+    """Verify creating a session with unknown agent returns 404."""
+    print("\n--- Unknown agent rejection tests ---")
+
+    req = urllib.request.Request(
+        f"{BASE}/chat/sessions",
+        data=json.dumps({"agent_id": "nonexistent-agent"}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        urllib.request.urlopen(req)
+        assert False, "Should have raised 404"
+    except urllib.error.HTTPError as e:
+        assert e.code == 404
+        print(f"  ✅ Unknown agent correctly rejected (404)")
+
+
+def _create_session_for_agent(agent_id: str) -> str:
+    """Create a session for the given agent and return its ID."""
+    req = urllib.request.Request(
+        f"{BASE}/chat/sessions",
+        data=json.dumps({"agent_id": agent_id}).encode(),
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    resp = urllib.request.urlopen(req)
+    return json.loads(resp.read())["id"]
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import sys
+
+    test_rest()
+    test_agent_selection()
+    test_hermes_status_endpoint()
+    test_create_session_with_hermes()
+    test_unknown_agent_rejected()
+
+    asyncio.run(test_ws())
+
+    print("\n✅✅✅ ALL TESTS PASSED ✅✅✅")
