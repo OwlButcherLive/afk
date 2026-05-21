@@ -139,10 +139,17 @@ class TunnelManager {
     ): Int {
         val serverSock = ServerSocket()
         serverSocket = serverSock
-        serverSock.bind(InetSocketAddress("127.0.0.1", localPort))
+        try {
+            // Try the requested port first
+            serverSock.bind(InetSocketAddress("127.0.0.1", localPort))
+        } catch (e: java.net.BindException) {
+            // Port is busy (e.g. ADB reverse) — let the OS pick a free one
+            Log.w(TAG, "Port $localPort in use, binding to ephemeral port instead")
+            serverSock.bind(InetSocketAddress("127.0.0.1", 0))
+        }
         val actualPort = serverSock.localPort
 
-        val params = Parameters("127.0.0.1", localPort, "127.0.0.1", remotePort)
+        val params = Parameters("127.0.0.1", actualPort, "127.0.0.1", remotePort)
 
         val forwarder = client.newLocalPortForwarder(params, serverSock)
 
