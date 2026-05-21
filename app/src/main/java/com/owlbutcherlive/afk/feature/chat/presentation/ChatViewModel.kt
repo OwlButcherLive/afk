@@ -55,6 +55,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     // Tracks the session's agentId so loadAgents() can select the right agent
     private var pendingAgentId: String? = null
 
+    // Logger for session identity tracing
+    private fun logSession(caller: String) {
+        val s = _state.value.sessionId
+        val a = _state.value.currentAgent?.id ?: "null"
+        val c = _state.value.connectionState
+        Log.d("SessionTrace", "$caller — sessionId='$s' agent='$a' conn=$c")
+    }
+
     init {
         // Restore cached state so the user sees their last session immediately
         val cachedMessages = chatCache.loadMessages()
@@ -68,6 +76,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                 )
             }
         }
+        Log.d("SessionTrace", "init — restored ${cachedMessages.size} cached msgs, draft='${cachedDraft.take(30)}'")
         // Load default session data; LoadSession intent overrides this
         loadInitialData()
     }
@@ -86,6 +95,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
             ChatIntent.ScreenResumed -> onScreenResumed()
             ChatIntent.DismissError -> setState { copy(sendError = null) }
             is ChatIntent.LoadSession -> {
+                Log.d("SessionTrace", "LoadSession — sessionId='${intent.sessionId}' agentId='${intent.agentId}'")
                 setState {
                     copy(
                         sessionId = intent.sessionId,
@@ -98,6 +108,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         isAgentTyping = false
                     )
                 }
+                logSession("LoadSession-after-setState")
                 chatCache.clear()
                 viewModelScope.launch {
                     // Use provided agentId directly (avoids network dependency for fetching it)
@@ -123,11 +134,13 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     // ─── Initialization ───────────────────────────────────────────────────
 
     private fun loadInitialData() {
+        Log.d("SessionTrace", "loadInitialData — START")
         viewModelScope.launch {
             loadAgents()
             loadHistory()
             connectWebSocket()
         }
+        logSession("loadInitialData-after-launch")
     }
 
     /**
@@ -249,12 +262,14 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                     sendError = "SSH tunnel is not active. Reconnect from the Dashboard first."
                 )
             }
+            logSession("connectWS-tunnel-inactive")
             return
         }
 
         val port = ConnectionSession.tunnelPort
         if (port == 0) {
             setState { copy(connectionState = ChatConnectionState.Failed) }
+            logSession("connectWS-port-0")
             return
         }
 
@@ -285,6 +300,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
                         retryCount = 0
                         retryJob?.cancel()
                         setState { copy(connectionState = ChatConnectionState.Connected, sendError = null) }
+                        logSession("WS-connected")
                     }
 
                     is WebSocketClient.WebSocketEvent.Disconnected -> {
@@ -339,6 +355,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
     private fun handleChatEvent(event: ChatEvent) {
         when (event) {
             is ChatEvent.Message -> {
+                Log.d("SessionTrace", "handleChatEvent — Message from agent=${event.agentId} id=${event.id}")
                 val message = ChatMessage(
                     id = event.id,
                     agentId = event.agentId,
@@ -377,6 +394,8 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
         val text = _state.value.inputText.trim()
         if (text.isEmpty()) return
 
+        logSession("sendMessage-before")
+
         val sessionId = _state.value.sessionId
         if (sessionId.isEmpty()) {
             Log.e(TAG, "sendMessage attempted with empty sessionId — blocking send")
@@ -398,6 +417,7 @@ class ChatViewModel(application: Application) : AndroidViewModel(application) {
 
         Log.d(TAG, "Sending message to session=$sessionId agent=$agentId text_len=${text.length}")
         val payload = ChatProtocol.createMessage(sessionId, agentId, text)
+        Log.d("SessionTrace", "sendMessage — WS payload session_id='$sessionId'")
         val sent = webSocketClient.send(payload)
         if (!sent) {
             setSendError("Failed to send message — connection lost.")
